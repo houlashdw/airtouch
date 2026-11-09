@@ -166,6 +166,23 @@ class AirInputService : AccessibilityService() {
         )
     }
 
+    /** Координаты — доли экрана. Не начинаем у самого края, чтобы не задеть системный жест «назад». */
+    private fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMs: Long = 200) {
+        val bounds = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+        val w = bounds.width().toFloat()
+        val h = bounds.height().toFloat()
+        val path = Path().apply {
+            moveTo(fromX * w, fromY * h)
+            lineTo(toX * w, toY * h)
+        }
+        dispatchGesture(
+            GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                .build(),
+            null, null,
+        )
+    }
+
     private fun tap(p: PointF) {
         val path = Path().apply { moveTo(p.x, p.y) }
         dispatchGesture(
