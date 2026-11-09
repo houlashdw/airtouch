@@ -322,6 +322,68 @@ class AirInputService : AccessibilityService() {
         }
     }
 
+    /**
+     * Печать в поле ввода через специальные возможности: читаем текст и позицию курсора,
+     * вставляем/стираем и ставим курсор после вставки. Работает в обычных полях; в некоторых
+     * веб-страницах и играх поля «нестандартные» — там текст может не вставиться.
+     */
+    private inner class FocusedFieldSink : TextSink {
+        private fun field(): AccessibilityNodeInfo? =
+            findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.also { it.refresh() }?.takeIf { it.isEditable && !it.isPassword }
+
+        private fun state(n: AccessibilityNodeInfo): Triple<String, Int, Int> {
+            val text = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
+            var start = n.textSelectionStart
+            var end = n.textSelectionEnd
+            if (start < 0 || start > text.length) start = text.length
+            if (end < start || end > text.length) end = start
+            return Triple(text, start, end)
+        }
+
+        override fun textBeforeCursor(): String? {
+            val n = field() ?: return null
+            val (text, start, _) = state(n)
+            return text.substring(0, start)
+        }
+
+        override fun insert(text: String) {
+            val n = field() ?: return
+            val (cur, start, end) = state(n)
+            set(n, cur.substring(0, start) + text + cur.substring(end), start + text.length)
+        }
+
+        override fun deleteBefore(count: Int) {
+            val n = field() ?: return
+            val (cur, start, end) = state(n)
+            if (start != end) {
+                set(n, cur.removeRange(start, end), start)
+            } else {
+                val from = (start - count).coerceAtLeast(0)
+                set(n, cur.removeRange(from, start), from)
+            }
+        }
+
+        override fun enter() {
+            field()?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+        }
+
+        private fun set(n: AccessibilityNodeInfo, text: String, cursor: Int) {
+            n.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                },
+            )
+            n.performAction(
+                AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+                },
+            )
+        }
+    }
+
     /** Счётчики для диагностики (сквозные тесты печатают их при ошибке). */
     object Stats {
         @Volatile var segmentsCompleted = 0
