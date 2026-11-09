@@ -12,8 +12,8 @@ class GestureEngineTest {
     private val three = booleanArrayOf(true, true, true, false)
     private val fist = booleanArrayOf(false, false, false, false)
 
-    private inner class Sim(cursor: Boolean = false) {
-        val engine = GestureEngine(EngineConfig(cursorEnabled = cursor))
+    private inner class Sim(cursor: Boolean = false, mode: ControlMode = ControlMode.GESTURES) {
+        val engine = GestureEngine(EngineConfig(mode = mode, cursorEnabled = cursor))
         val swipes = mutableListOf<AirGesture>()
         val touches = mutableListOf<TouchEvent>()
         val actions = mutableListOf<SystemAction>()
@@ -185,6 +185,61 @@ class GestureEngineTest {
     fun handLostWhileDragging_releasesFinger() {
         val sim = Sim(cursor = true).hold(300, finger).hold(100, finger, pinch = true)
             .move(0.5f, 0.3f, 300, finger, pinch = true).lose()
+        assertEquals("Up", kinds(sim.touches).last())
+    }
+
+    // ---------- Режим «щипок как палец» ----------
+
+    private fun pinchSim() = Sim(mode = ControlMode.PINCH)
+
+    @Test
+    fun pinchMode_wavingAndPokingDoNothing() {
+        val sim = pinchSim().apply { x = 0.2f }
+            .hold(300, palm).move(0.8f, 0.5f, 250, palm).move(0.2f, 0.5f, 250, palm)  // махи
+            .resize(0.21f, 165, palm).hold(900, palm).resize(0.15f, 200, palm)        // тык и держать
+            .hold(1200, vSign).hold(1200, fist)                                       // «V», кулак
+        assertEquals(emptyList<AirGesture>(), sim.swipes)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+        assertEquals(emptyList<TouchEvent>(), sim.touches)
+        assert(sim.engine.cursor != null) { "рука двигает курсор" }
+    }
+
+    @Test
+    fun pinchMode_anyHandPoseMovesCursor() {
+        for (pose in listOf(palm, finger, fist, vSign)) {
+            val sim = pinchSim().apply { x = 0.3f }.hold(200, pose).move(0.7f, 0.5f, 300, pose).hold(300, pose)
+            assert(sim.engine.cursor!!.x > 0.6f) { "pose=${pose.toList()} cursor=${sim.engine.cursor}" }
+        }
+    }
+
+    @Test
+    fun pinchMode_tapAndScroll() {
+        val sim = pinchSim().hold(300, finger).hold(130, finger, pinch = true).hold(200, finger)
+            .hold(100, finger, pinch = true).move(0.5f, 0.25f, 300, finger, pinch = true).hold(200, finger)
+        val k = kinds(sim.touches)
+        assertEquals("Tap", k.first())
+        assertEquals("Down", k[1])
+        assertEquals("Up", k.last())
+    }
+
+    @Test
+    fun pinchMode_lowerHandToBottom_showsDock_andTapRunsAction() {
+        // Опустили руку в самый низ (курсор упирается в край), подождали — панель выехала.
+        val sim = pinchSim().apply { x = 0.2f; y = 0.5f }.hold(200, finger).move(0.2f, 0.95f, 300, finger)
+        var dock = false
+        repeat(15) { sim.t += 33; dock = sim.engine.process(HandFrame(sim.t, syntheticHand(0.2f, 0.95f, finger))).dock }
+        assert(dock) { "dock should be visible" }
+        // Щипок на левой кнопке — «назад», без тапа по приложению.
+        sim.hold(130, finger, pinch = true).hold(200, finger)
+        assertEquals(listOf(SystemAction.BACK), sim.actions)
+        assertEquals(emptyList<TouchEvent>(), sim.touches)
+    }
+
+    @Test
+    fun pinchMode_draggingDownDoesNotOpenDock() {
+        val sim = pinchSim().hold(300, finger).hold(100, finger, pinch = true)
+            .move(0.5f, 0.97f, 300, finger, pinch = true).hold(600, finger, pinch = true).hold(200, finger)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
         assertEquals("Up", kinds(sim.touches).last())
     }
 

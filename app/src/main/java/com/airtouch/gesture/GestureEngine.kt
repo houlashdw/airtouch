@@ -1,12 +1,31 @@
 package com.airtouch.gesture
 
-/** Системные кнопки, которые вызываются жестами. */
-enum class SystemAction { HOME, BACK, RECENTS }
+/** Системные кнопки. */
+enum class SystemAction { HOME, BACK, RECENTS, NOTIFICATIONS }
+
+/**
+ * PINCH — «щипок как палец» (как Vision Pro / Quest): рука двигает курсор, всё делает только щипок,
+ *         системные кнопки — на панели, которая выезжает, если опустить курсор к нижнему краю.
+ *         Случайных срабатываний нет: без щипка ничего не нажимается.
+ * GESTURES — жесты махами (мах, тык, «V»).
+ */
+enum class ControlMode { PINCH, GESTURES }
+
+/** Кнопки нижней панели слева направо. */
+val DOCK_ACTIONS = listOf(SystemAction.BACK, SystemAction.HOME, SystemAction.RECENTS, SystemAction.NOTIFICATIONS)
 
 /** Идёт удержание: кольцо на экране заполняется [progress] 0..1. */
 data class Hold(val action: SystemAction, val progress: Float)
 
 data class EngineConfig(
+    val mode: ControlMode = ControlMode.PINCH,
+    /** Курсор у самого низа экрана столько — выезжает панель кнопок. */
+    val dockEnterY: Float = 0.97f,
+    val dockDwellMs: Long = 300,
+    /** Курсор поднялся выше — панель прячется. */
+    val dockExitY: Float = 0.78f,
+    /** Верхняя граница панели (доля экрана). */
+    val dockTop: Float = 0.84f,
     val swipe: SwipeConfig = SwipeConfig(),
     /** Режим курсора: ☝️ палец — курсор, 🤏 щипок — нажатие. Выключен — все позы машут. */
     val cursorEnabled: Boolean = false,
@@ -25,6 +44,8 @@ data class EngineOutput(
     val touch: TouchEvent? = null,
     val action: SystemAction? = null,
     val hold: Hold? = null,
+    /** Показана нижняя панель кнопок (режим PINCH). */
+    val dock: Boolean = false,
 )
 
 /**
@@ -55,6 +76,9 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
     private var vFired = false
     private var vMismatch = 0
 
+    private var dockVisible = false
+    private var dockSince: Long? = null
+
     /** Центр ладони (кадр, 0..1) — для точки-трекера и кольца удержания. */
     var palm: Landmark? = null
         private set
@@ -81,6 +105,8 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         poke.reset()
         resetV()
         palm = null
+        dockVisible = false
+        dockSince = null
         return EngineOutput(touch = up)
     }
 
@@ -105,6 +131,8 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
             val (action, hold) = if (pointer.isTouching) null to null else backHold(pose, frame, cfg)
             return EngineOutput(touch = touch, action = action, hold = hold)
         }
+
+        if (cfg.mode == ControlMode.PINCH) return processPinch(frame, cfg)
 
         // 1. Тык — любой формой руки. Пока он идёт, всё остальное молчит.
         val pk = poke.process(frame)
@@ -163,6 +191,45 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
             t - since > 120 -> null to Hold(SystemAction.BACK, progress)
             else -> null to null
         }
+    }
+
+    /** Режим «щипок как палец». */
+    private fun processPinch(frame: HandFrame, cfg: EngineConfig): EngineOutput {
+        val t = frame.timestampMs
+        poke.reset()
+        resetV()
+        if (!cursorMode) {
+            cursorMode = true
+            swipes.disarm()
+        }
+        var touch = pointer.process(frame)
+        val c = pointer.cursor
+
+        // Панель кнопок: курсор «упёрся» в низ и задержался. Во время перетаскивания не показываем.
+        if (c != null) {
+            if (!dockVisible) {
+                if (c.y >= cfg.dockEnterY && !pointer.isTouching) {
+                    val since = dockSince ?: t.also { dockSince = it }
+                    if (t - since >= cfg.dockDwellMs) dockVisible = true
+                } else {
+                    dockSince = null
+                }
+            } else if (c.y < cfg.dockExitY && !pointer.isTouching) {
+                dockVisible = false
+                dockSince = null
+            }
+        }
+
+        var action: SystemAction? = null
+        if (dockVisible && touch != null && touch.y >= cfg.dockTop) {
+            if (touch is TouchEvent.Tap) {
+                action = DOCK_ACTIONS[(touch.x * DOCK_ACTIONS.size).toInt().coerceIn(0, DOCK_ACTIONS.size - 1)]
+                dockVisible = false
+                dockSince = null
+            }
+            touch = null // по панели не «тапаем» и не тянем приложение
+        }
+        return EngineOutput(touch = touch, action = action, dock = dockVisible)
     }
 
     private fun leaveCursor(): TouchEvent? {

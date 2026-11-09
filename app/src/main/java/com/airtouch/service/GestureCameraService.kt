@@ -368,7 +368,7 @@ class GestureCameraService : LifecycleService() {
                 if (engine.keyboardMode) keyboard?.cancelStroke() else dispatch(lost, input)
                 AirTouchState.update {
                     it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false,
-                        holdAction = null, kbCursorVisible = false, keyboard = keyboard?.view())
+                        holdAction = null, kbCursorVisible = false, keyboard = keyboard?.view(), dockVisible = false)
                 }
             }
             return
@@ -416,6 +416,7 @@ class GestureCameraService : LifecycleService() {
                 cursorY = cursor?.y ?: s.cursorY,
                 pinching = kb == null && cursor?.pinching == true,
                 holdAction = out.hold?.action,
+                dockVisible = out.dock,
                 holdProgress = out.hold?.progress ?: 0f,
                 fps = fps,
                 latencyMs = (now - frame.timestampMs).toInt(),

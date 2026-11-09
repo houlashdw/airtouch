@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.ControlMode
 import com.airtouch.gesture.HandPose
 import com.airtouch.gesture.SystemAction
 import com.airtouch.service.AirInputService
@@ -154,19 +155,28 @@ private fun AirTouchScreen() {
                 if (status.isRunning) GestureCameraService.stop(context) else GestureCameraService.start(context)
             }
 
-            SettingsCard(settings)
+            var mode by remember { mutableStateOf(settings.controlMode) }
+            ModeCard(mode) { mode = it; settings.controlMode = it }
+
+            SettingsCard(settings, mode)
 
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Жесты", style = MaterialTheme.typography.titleMedium)
-                    Text("👋 Мах любой формой руки — листать ←→↑↓")
-                    Text("👉 Тык (рука к экрану и обратно) — домой")
-                    Text("👉 Тык и задержать руку у экрана — недавние приложения")
-                    Text("✌️ «V» неподвижно полсекунды — назад")
-                    Text("☝️🤏 Курсор и щипок — включаются отдельно в настройках")
+                    if (mode == ControlMode.PINCH) {
+                        Text("✋ Рука двигается — двигается курсор. Больше ничего не происходит.")
+                        Text("🤏 Быстрый щипок (большой + указательный) — нажать")
+                        Text("🤏 Щипок и вести — листать / прокручивать / перетаскивать")
+                        Text("🤏 Щипок и держать — долгое нажатие")
+                        Text("👇 Опустите руку вниз — выедет панель ◁ ○ ▢ 🔔, нажмите щипком")
+                    } else {
+                        Text("👋 Мах любой формой руки — листать ←→↑↓")
+                        Text("👉 Тык (рука к экрану и обратно) — домой")
+                        Text("👉 Тык и задержать руку у экрана — недавние приложения")
+                        Text("✌️ «V» неподвижно полсекунды — назад")
+                        Text("☝️🤏 Курсор и щипок — включаются отдельно в настройках")
+                    }
                     Text("⌨️ Поле ввода → воздушная клавиатура: 🤏 росчерк через буквы — слово, быстрый щипок — буква, ⌫ после росчерка стирает слово, ✌️ — закрыть")
-                    Text("Удержание показывает кольцо — передумали, уберите руку, пока кольцо не замкнулось.",
-                        style = MaterialTheme.typography.bodySmall)
                 }
             }
 
@@ -174,10 +184,14 @@ private fun AirTouchScreen() {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Советы", style = MaterialTheme.typography.titleMedium)
                     Text("• Рука целиком в кадре фронталки: 20–40 см от телефона, не вплотную.")
-                    Text("• Покажите руку, затем мах. Подъём руки в кадр не считается.")
-                    Text("• Листать подряд можно без пауз; в обратную сторону — задержите руку на миг.")
-                    Text("• Резкий мах «за край кадра» тоже засчитывается.")
-                    Text("• Тык — короткое движение всей рукой к телефону, сантиметров на 10.")
+                    if (mode == ControlMode.PINCH) {
+                        Text("• Щипок — кончики большого и указательного касаются, указательный не прячьте в кулак.")
+                        Text("• Чтобы пролистать ленту: щипок, быстрый росчерк вверх, разжать — как пальцем по экрану.")
+                    } else {
+                        Text("• Покажите руку, затем мах. Подъём руки в кадр не считается.")
+                        Text("• Листать подряд можно без пауз; в обратную сторону — задержите руку на миг.")
+                        Text("• Тык — короткое движение всей рукой к телефону, сантиметров на 10.")
+                    }
                     Text("• В темноте точность падает — включите свет.")
                 }
             }
@@ -241,7 +255,8 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
                     status.holdAction == SystemAction.BACK -> "✌️ держите — назад"
                     status.holdAction == SystemAction.RECENTS -> "тык — держите руку: недавние"
                     status.cursorVisible && status.pinching -> "щипок 🤏 — нажатие"
-                    status.cursorVisible -> "палец ☝️ — курсор"
+                    status.dockVisible -> "панель кнопок — нажмите щипком"
+                    status.cursorVisible -> "руку — это курсор"
                     status.pose == HandPose.V_SIGN -> "✌️ — замрите, чтобы «назад»"
                     status.pose != null -> "руку — машите или тыкайте"
                     else -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
@@ -253,6 +268,7 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
                 SystemAction.HOME -> "домой"
                 SystemAction.BACK -> "назад"
                 SystemAction.RECENTS -> "недавние"
+                SystemAction.NOTIFICATIONS -> "уведомления"
                 null -> null
             }
             if (lastAction != null) Text("Последнее действие: $lastAction")
@@ -292,7 +308,36 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
 }
 
 @Composable
-private fun SettingsCard(settings: AirTouchSettings) {
+private fun ModeCard(mode: ControlMode, onChange: (ControlMode) -> Unit) {
+    ElevatedCard(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Способ управления", style = MaterialTheme.typography.titleMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = mode == ControlMode.PINCH,
+                    onClick = { onChange(ControlMode.PINCH) },
+                    label = { Text("🤏 Щипок как палец") },
+                )
+                FilterChip(
+                    selected = mode == ControlMode.GESTURES,
+                    onClick = { onChange(ControlMode.GESTURES) },
+                    label = { Text("👋 Жесты махами") },
+                )
+            }
+            Text(
+                if (mode == ControlMode.PINCH) {
+                    "Рекомендую. Как на Vision Pro: рука — курсор, всё делает только щипок. Без щипка ничего не нажмётся."
+                } else {
+                    "Мах, тык, «V». Быстрее для ленты, но жесты иногда путаются."
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
     var sensitivity by remember { mutableFloatStateOf(settings.sensitivity) }
     var deadZone by remember { mutableFloatStateOf(settings.deadZone) }
     var topThird by remember { mutableStateOf(settings.topThirdOnly) }
@@ -306,7 +351,7 @@ private fun SettingsCard(settings: AirTouchSettings) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Настройки", style = MaterialTheme.typography.titleMedium)
 
-            SwitchRow(
+            if (mode == ControlMode.GESTURES) SwitchRow(
                 title = "Режим курсора",
                 subtitle = "☝️ палец — курсор, 🤏 щипок — нажать, щипок и вести — прокрутка, " +
                     "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
@@ -320,37 +365,39 @@ private fun SettingsCard(settings: AirTouchSettings) {
                 checked = airKeyboard,
             ) { airKeyboard = it; settings.airKeyboard = it }
 
-            SwitchRow(
-                title = "Обратное направление махов",
-                subtitle = "Если кажется, что листает «не туда»",
-                checked = invert,
-            ) { invert = it; settings.invertSwipes = it }
+            if (mode == ControlMode.GESTURES) {
+                SwitchRow(
+                    title = "Обратное направление махов",
+                    subtitle = "Если кажется, что листает «не туда»",
+                    checked = invert,
+                ) { invert = it; settings.invertSwipes = it }
 
-            Text("Чувствительность: ×${"%.1f".format(sensitivity)}")
-            Slider(
-                value = sensitivity,
-                onValueChange = { sensitivity = it; settings.sensitivity = it },
-                valueRange = 0.5f..2f,
-            )
+                Text("Чувствительность махов: ×${"%.1f".format(sensitivity)}")
+                Slider(
+                    value = sensitivity,
+                    onValueChange = { sensitivity = it; settings.sensitivity = it },
+                    valueRange = 0.5f..2f,
+                )
 
-            Text("Мёртвая зона (гасит дрожание руки): ${(deadZone * 1000).roundToInt()}")
-            Slider(
-                value = deadZone,
-                onValueChange = { deadZone = it; settings.deadZone = it },
-                valueRange = 0f..0.04f,
-            )
+                Text("Мёртвая зона (гасит дрожание руки): ${(deadZone * 1000).roundToInt()}")
+                Slider(
+                    value = deadZone,
+                    onValueChange = { deadZone = it; settings.deadZone = it },
+                    valueRange = 0f..0.04f,
+                )
 
-            SwitchRow(
-                title = "Только верхняя треть кадра",
-                subtitle = "Рука ниже — например, при селфи — игнорируется",
-                checked = topThird,
-            ) { topThird = it; settings.topThirdOnly = it }
+                SwitchRow(
+                    title = "Только верхняя треть кадра",
+                    subtitle = "Рука ниже — например, при селфи — игнорируется",
+                    checked = topThird,
+                ) { topThird = it; settings.topThirdOnly = it }
 
-            SwitchRow(
-                title = "Вертикальные свайпы",
-                subtitle = "Мах вверх/вниз листает ленту",
-                checked = vertical,
-            ) { vertical = it; settings.verticalSwipes = it }
+                SwitchRow(
+                    title = "Вертикальные свайпы",
+                    subtitle = "Мах вверх/вниз листает ленту",
+                    checked = vertical,
+                ) { vertical = it; settings.verticalSwipes = it }
+            }
 
             Text("Камера", style = MaterialTheme.typography.titleSmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

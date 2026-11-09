@@ -153,6 +153,7 @@ class AirInputService : AccessibilityService() {
                     SystemAction.HOME -> GLOBAL_ACTION_HOME
                     SystemAction.BACK -> GLOBAL_ACTION_BACK
                     SystemAction.RECENTS -> GLOBAL_ACTION_RECENTS
+                    SystemAction.NOTIFICATIONS -> GLOBAL_ACTION_NOTIFICATIONS
                 },
             )
         }

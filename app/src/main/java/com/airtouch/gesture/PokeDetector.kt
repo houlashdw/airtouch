@@ -4,12 +4,12 @@ import kotlin.math.hypot
 
 data class PokeConfig(
     /** Тык = рука резко приблизилась к камере: длина И ширина ладони выросли хотя бы во столько раз… */
-    val riseRatio: Float = 1.2f,
-    val widthRiseRatio: Float = 1.12f,
+    val riseRatio: Float = 1.28f,
+    val widthRiseRatio: Float = 1.2f,
     /** …не дольше чем за это время (медленно поднести руку ближе — не тык). */
-    val riseWindowMs: Long = 350,
+    val riseWindowMs: Long = 300,
     /** Сдвиг вбок во время тыка, в длинах ладони. Больше — это мах, а не тык. */
-    val maxLateral: Float = 0.6f,
+    val maxLateral: Float = 0.35f,
     /** Рука вернулась (размер упал ниже base × этого) — тык завершён → «домой». */
     val releaseRatio: Float = 1.08f,
     /** Ткнул и держит руку у камеры столько — «недавние приложения». */

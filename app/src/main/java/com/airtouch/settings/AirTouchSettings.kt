@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.airtouch.gesture.ActivationZone
+import com.airtouch.gesture.ControlMode
 import com.airtouch.gesture.EngineConfig
 import com.airtouch.gesture.SwipeConfig
 
@@ -37,6 +38,10 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_CURSOR, false)
         set(v) = prefs.edit { putBoolean(KEY_CURSOR, v) }
 
+    var controlMode: ControlMode
+        get() = if (prefs.getString(KEY_MODE, null) == ControlMode.GESTURES.name) ControlMode.GESTURES else ControlMode.PINCH
+        set(v) = prefs.edit { putString(KEY_MODE, v.name) }
+
     var airKeyboard: Boolean
         get() = prefs.getBoolean(KEY_AIR_KEYBOARD, true)
         set(v) = prefs.edit { putBoolean(KEY_AIR_KEYBOARD, v) }
@@ -45,7 +50,8 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_INVERT, false)
         set(v) = prefs.edit { putBoolean(KEY_INVERT, v) }
 
-    fun engineConfig(): EngineConfig = EngineConfig(swipe = swipeConfig(), cursorEnabled = cursorEnabled)
+    fun engineConfig(): EngineConfig =
+        EngineConfig(mode = controlMode, swipe = swipeConfig(), cursorEnabled = cursorEnabled)
 
     fun swipeConfig(): SwipeConfig = SwipeConfig(
         sensitivity = sensitivity,
@@ -64,5 +70,6 @@ class AirTouchSettings(context: Context) {
         const val KEY_CURSOR = "cursor_mode"
         const val KEY_INVERT = "invert_swipes"
         const val KEY_AIR_KEYBOARD = "air_keyboard"
+        const val KEY_MODE = "control_mode"
     }
 }

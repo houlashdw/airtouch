@@ -23,6 +23,7 @@ import com.airtouch.keyboard.KeyCode
 import com.airtouch.keyboard.KeyboardLayout
 import com.airtouch.keyboard.Lang
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.DOCK_ACTIONS
 import com.airtouch.gesture.SystemAction
 import com.airtouch.ui.ToggleActivity
 import kotlinx.coroutines.CoroutineScope
@@ -230,6 +231,16 @@ private class TrackerView(context: Context) : View(context) {
         setShadowLayer(6 * d, 0f, 0f, 0xCC000000.toInt())
     }
     private val arcRect = RectF()
+    private val dockBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6121418.toInt() }
+    private val dockBtn = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B3038.toInt() }
+    private val dockHover = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
+    private val dockIcon = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt(); textSize = 30 * d; textAlign = Paint.Align.CENTER
+    }
+    private val dockText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xCCFFFFFF.toInt(); textSize = 12 * d; textAlign = Paint.Align.CENTER
+    }
+    private val dockRect = RectF()
     private val bannerBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6B45309.toInt() }
     private val bannerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); textSize = 14 * d; textAlign = Paint.Align.CENTER
@@ -278,6 +289,8 @@ private class TrackerView(context: Context) : View(context) {
 
         if (s.keyboardVisible) return // над клавиатурой свой курсор
 
+        if (s.dockVisible) drawDock(canvas, s)
+
         if (s.cursorVisible) {
             val cx = s.cursorX * width
             val cy = s.cursorY * height
@@ -306,10 +319,39 @@ private class TrackerView(context: Context) : View(context) {
         canvas.drawCircle(x, y, 10 * d, ringPaint)
     }
 
+    /** Нижняя панель: ◁ ○ ▢ 🔔 — большие кнопки, нажимаются щипком. */
+    private fun drawDock(canvas: Canvas, s: AirTouchState.Status) {
+        val top = height * DOCK_TOP
+        canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), dockBg)
+        val n = DOCK_ACTIONS.size
+        val cellW = width / n.toFloat()
+        val pad = 8 * d
+        val hovered = if (s.cursorVisible && s.cursorY >= DOCK_TOP) (s.cursorX * n).toInt().coerceIn(0, n - 1) else -1
+        DOCK_ACTIONS.forEachIndexed { i, a ->
+            dockRect.set(i * cellW + pad, top + pad, (i + 1) * cellW - pad, height - pad - 24 * d)
+            canvas.drawRoundRect(dockRect, 16 * d, 16 * d, if (i == hovered) dockHover else dockBtn)
+            val icon = when (a) {
+                SystemAction.BACK -> "◁"
+                SystemAction.HOME -> "○"
+                SystemAction.RECENTS -> "▢"
+                SystemAction.NOTIFICATIONS -> "🔔"
+            }
+            val name = when (a) {
+                SystemAction.BACK -> "Назад"
+                SystemAction.HOME -> "Домой"
+                SystemAction.RECENTS -> "Недавние"
+                SystemAction.NOTIFICATIONS -> "Уведомления"
+            }
+            canvas.drawText(icon, dockRect.centerX(), dockRect.centerY() + dockIcon.textSize * 0.2f, dockIcon)
+            canvas.drawText(name, dockRect.centerX(), dockRect.bottom - 8 * d, dockText)
+        }
+    }
+
     private fun label(a: SystemAction) = when (a) {
         SystemAction.HOME -> "⌂ Домой"
         SystemAction.BACK -> "← Назад"
-        SystemAction.RECENTS -> "▣ Недавние"
+        SystemAction.RECENTS -> "▢ Недавние"
+        SystemAction.NOTIFICATIONS -> "🔔 Уведомления"
     }
 
     private fun arrow(g: AirGesture) = when (g) {
@@ -322,6 +364,8 @@ private class TrackerView(context: Context) : View(context) {
     private companion object {
         const val FLASH_MS = 350L
         const val ACTION_FLASH_MS = 700L
+        /** Совпадает с EngineConfig.dockTop. */
+        const val DOCK_TOP = 0.84f
     }
 }
 
