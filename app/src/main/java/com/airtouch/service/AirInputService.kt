@@ -160,11 +160,17 @@ class AirInputService : AccessibilityService() {
         }
     }
 
+    /**
+     * Доли экрана → ЦЕЛЫЕ пиксели. Это важно: продолжение жеста (continueStroke) Android принимает,
+     * только если его начало в точности совпадает с концом предыдущего куска, а конец он пересчитывает
+     * сам (a + (b − a)·t). На дробных координатах это даёт погрешность в 1e-5 пикселя — и система
+     * отменяет продолжение («палец отрывается» через 40 мс). На целых числах расчёт точный.
+     */
     private fun toScreen(x: Float, y: Float): PointF {
         val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
         return PointF(
-            (x * b.width()).coerceIn(1f, b.width() - 2f),
-            (y * b.height()).coerceIn(1f, b.height() - 2f),
+            Math.round(x * b.width()).coerceIn(1, b.width() - 2).toFloat(),
+            Math.round(y * b.height()).coerceIn(1, b.height() - 2).toFloat(),
         )
     }
 
