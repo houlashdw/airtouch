@@ -118,6 +118,14 @@ class AirInputService : AccessibilityService() {
         }
     }
 
+    private fun toScreen(x: Float, y: Float): PointF {
+        val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+        return PointF(
+            (x * b.width()).coerceIn(1f, b.width() - 2f),
+            (y * b.height()).coerceIn(1f, b.height() - 2f),
+        )
+    }
+
     /** Координаты — доли экрана. Не начинаем у самого края, чтобы не задеть системный жест «назад». */
     private fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMs: Long = 200) {
         val bounds = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
