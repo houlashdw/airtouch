@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.airtouch.gesture.ActivationZone
+import com.airtouch.gesture.EngineConfig
 import com.airtouch.gesture.SwipeConfig
 
 /** Пользовательские настройки. Сервис подписан на изменения и применяет их на лету. */
@@ -32,6 +33,12 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_FRONT_CAMERA, true)
         set(v) = prefs.edit { putBoolean(KEY_FRONT_CAMERA, v) }
 
+    var cursorEnabled: Boolean
+        get() = prefs.getBoolean(KEY_CURSOR, false)
+        set(v) = prefs.edit { putBoolean(KEY_CURSOR, v) }
+
+    fun engineConfig(): EngineConfig = EngineConfig(swipe = swipeConfig(), cursorEnabled = cursorEnabled)
+
     fun swipeConfig(): SwipeConfig = SwipeConfig(
         sensitivity = sensitivity,
         deadZone = deadZone,
@@ -46,5 +53,6 @@ class AirTouchSettings(context: Context) {
         const val KEY_TOP_THIRD = "top_third_only"
         const val KEY_VERTICAL = "vertical_swipes"
         const val KEY_FRONT_CAMERA = "front_camera"
+        const val KEY_CURSOR = "cursor_mode"
     }
 }

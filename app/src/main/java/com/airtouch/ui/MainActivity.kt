@@ -159,9 +159,10 @@ private fun AirTouchScreen() {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Как махать", style = MaterialTheme.typography.titleMedium)
                     Text("• Рука целиком в кадре фронталки: 20–40 см от телефона, не вплотную.")
-                    Text("• Ладонь или палец — неважно. Мах быстрый, примерно на четверть ширины кадра.")
+                    Text("• Сначала покажите руку, затем короткий быстрый мах. Подъём руки в кадр не считается.")
+                    Text("• Листать подряд можно без пауз: возврат руки назад игнорируется.")
+                    Text("• Хотите листнуть в обратную сторону — задержите руку на миг.")
                     Text("• Проверьте прямо здесь: строки «Вижу» и «Последний жест» выше.")
-                    Text("• После маха задержите руку на долю секунды: обратное движение не считается.")
                     Text("• Кулак и медленные движения игнорируются.")
                     Text("• Если не видит руку — включите свет: в темноте точность падает.")
                 }
@@ -203,8 +204,8 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
     val stateText = when (status.mode) {
         Mode.OFF -> "Выключено"
         Mode.ACTIVE -> if (status.handVisible) "Рука видна ✋" else "Ищу руку…"
-        Mode.IDLE -> "Экономия: руки нет больше 3 с"
-        Mode.SLEEPING -> "Уснул: 30 с без руки. Включите снова кнопкой ✋"
+        Mode.IDLE -> "Жду руку (экономный режим)"
+        Mode.PAUSED -> "Пауза: экран был выключен"
         Mode.ERROR -> status.error ?: "Ошибка"
     }
     val lastGesture = when (status.lastGesture) {
@@ -222,18 +223,29 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
                 Text("⚠️ Мало света — точность снижена", color = MaterialTheme.colorScheme.error)
             }
             if (status.mode == Mode.ACTIVE) {
-                val seen = when (status.pose) {
-                    HandPose.OPEN_PALM -> "ладонь ✋ — можно махать"
-                    HandPose.POINTING -> "палец ☝️ — можно махать"
-                    HandPose.V_SIGN, HandPose.OTHER -> "руку — можно махать"
-                    HandPose.FIST -> "кулак ✊ — разожмите руку"
-                    null -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
+                val seen = when {
+                    status.cursorVisible && status.pinching -> "щипок 🤏 — нажатие"
+                    status.cursorVisible -> "палец ☝️ — курсор"
+                    else -> when (status.pose) {
+                        HandPose.OPEN_PALM -> "ладонь ✋ — можно махать"
+                        HandPose.POINTING -> "палец ☝️ — можно махать"
+                        HandPose.V_SIGN, HandPose.OTHER -> "руку — можно махать"
+                        HandPose.FIST -> "кулак ✊ — ничего не делает"
+                        null -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
+                    }
                 }
                 Text("Вижу: $seen")
             }
             if (lastGesture != null) Text("Последний жест: $lastGesture")
             Button(onClick = onToggle, enabled = ready || status.isRunning, modifier = Modifier.fillMaxWidth()) {
                 Text(if (status.isRunning) "Выключить" else "Включить")
+            }
+            if (status.isRunning) {
+                Text(
+                    "Работает, пока горит экран. Экран погас — пауза, включили — продолжает сам. " +
+                        "Камера включена постоянно, поэтому батарея садится быстрее.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             if (!ready) {
                 Text("Сначала пройдите шаги настройки выше.", style = MaterialTheme.typography.bodySmall)
@@ -254,10 +266,18 @@ private fun SettingsCard(settings: AirTouchSettings) {
     var topThird by remember { mutableStateOf(settings.topThirdOnly) }
     var vertical by remember { mutableStateOf(settings.verticalSwipes) }
     var front by remember { mutableStateOf(settings.useFrontCamera) }
+    var cursor by remember { mutableStateOf(settings.cursorEnabled) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text("Настройки", style = MaterialTheme.typography.titleMedium)
+
+            SwitchRow(
+                title = "Режим курсора",
+                subtitle = "Палец — курсор. Щипок (большой + указательный) — нажать, " +
+                    "щипок и вести — прокрутка, щипок и держать — долгое нажатие. Ладонь — махи.",
+                checked = cursor,
+            ) { cursor = it; settings.cursorEnabled = it }
 
             Text("Чувствительность: ×${"%.1f".format(sensitivity)}")
             Slider(

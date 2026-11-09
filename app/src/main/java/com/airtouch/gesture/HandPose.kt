@@ -1,6 +1,6 @@
 package com.airtouch.gesture
 
-/** Статическая поза руки. В MVP для свайпа нужна только OPEN_PALM; остальные — задел под drag/tap/«назад». */
+/** Статическая поза руки. OPEN_PALM = 3–4 выпрямленных пальца (ладонь редко раскрыта идеально). */
 enum class HandPose { OPEN_PALM, FIST, POINTING, V_SIGN, OTHER }
 
 object HandPoseClassifier {
@@ -28,7 +28,7 @@ object HandPoseClassifier {
         val e = extendedFingers(frame)
         val count = e.count { it }
         return when {
-            count == 4 -> HandPose.OPEN_PALM
+            count >= 3 -> HandPose.OPEN_PALM
             count == 0 -> HandPose.FIST
             e[0] && count == 1 -> HandPose.POINTING
             e[0] && e[1] && count == 2 -> HandPose.V_SIGN

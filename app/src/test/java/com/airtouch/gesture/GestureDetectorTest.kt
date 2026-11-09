@@ -12,8 +12,15 @@ class GestureDetectorTest {
 
     // ---------- Синтетическая рука ----------
 
-    /** Ладонь пальцами вверх. [extended] — [указательный, средний, безымянный, мизинец]. */
     private fun hand(
+        cx: Float,
+        cy: Float,
+        extended: BooleanArray = booleanArrayOf(true, true, true, true),
+        s: Float = 0.15f,
+    ): List<Landmark> = syntheticHand(cx, cy, extended, s)
+
+    @Suppress("unused")
+    private fun legacyHand(
         cx: Float,
         cy: Float,
         extended: BooleanArray = booleanArrayOf(true, true, true, true),
@@ -159,6 +166,32 @@ class GestureDetectorTest {
     }
 
     @Test
+    fun repeatedSameDirection_noPauseNeeded() {
+        // Листаем ленту: мах вправо, естественный возврат, снова мах — без остановок.
+        val sim = Sim().at(0.2f, 0.5f).hold(300)
+        repeat(3) {
+            sim.move(0.8f, 0.5f, 220, eased = true).move(0.2f, 0.5f, 330, eased = true)
+        }
+        sim.hold(300)
+        assertEquals(List(3) { AirGesture.SwipeRight }, sim.events)
+    }
+
+    @Test
+    fun raisingHandIntoFrame_isNotSwipeUp() {
+        // Рука появляется снизу и поднимается в кадр — без паузы, сразу с движением.
+        val sim = Sim().at(0.5f, 0.95f).move(0.5f, 0.45f, 400).hold(400)
+        assertEquals(emptyList<AirGesture>(), sim.events)
+    }
+
+    @Test
+    fun threeFingers_countAsPalm() {
+        assertEquals(
+            HandPose.OPEN_PALM,
+            HandPoseClassifier.classify(HandFrame(0, hand(0.5f, 0.5f, booleanArrayOf(true, true, true, false)))),
+        )
+    }
+
+    @Test
     fun secondSwipe_worksAfterHandRests() {
         val sim = Sim().at(0.2f, 0.5f).hold(300)
             .move(0.8f, 0.5f, 250).hold(600)
@@ -168,8 +201,10 @@ class GestureDetectorTest {
 
     @Test
     fun handLost_resetsCooldown() {
+        // Рука ушла и вернулась: на миг показали её (~0,2 с) — и сразу можно махать в любую сторону.
         val sim = Sim().at(0.2f, 0.5f).hold(200).move(0.8f, 0.5f, 250)
             .lose()
+            .hold(200)
             .move(0.2f, 0.5f, 250)
         assertEquals(listOf(AirGesture.SwipeRight, AirGesture.SwipeLeft), sim.events)
     }
@@ -185,7 +220,7 @@ class GestureDetectorTest {
     @Test
     fun sensitivity_controlsRequiredDistance() {
         fun shortSwipe(cfg: SwipeConfig) =
-            Sim(cfg).at(0.4f, 0.5f).hold(200).move(0.6f, 0.5f, 150).hold(200).events
+            Sim(cfg).at(0.43f, 0.5f).hold(200).move(0.57f, 0.5f, 120).hold(200).events
 
         assertEquals(emptyList<AirGesture>(), shortSwipe(SwipeConfig(sensitivity = 1f)))
         assertEquals(listOf(AirGesture.SwipeRight), shortSwipe(SwipeConfig(sensitivity = 2f)))

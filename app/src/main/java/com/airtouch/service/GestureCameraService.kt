@@ -5,7 +5,9 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -28,7 +30,7 @@ import com.airtouch.R
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.core.Timeouts
-import com.airtouch.gesture.GestureDetector
+import com.airtouch.gesture.GestureEngine
 import com.airtouch.gesture.HandFrame
 import com.airtouch.settings.AirTouchSettings
 import com.airtouch.ui.MainActivity
@@ -42,18 +44,21 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * Камера → MediaPipe → GestureDetector → AirInputService.
+ * Камера → MediaPipe → GestureEngine (махи + курсор) → AirInputService.
+ *
+ * Не засыпает, пока экран включён (без руки — экономичные ~7 FPS). Экран погас — камера на паузе,
+ * экран включился — продолжает сама, кнопку нажимать не нужно.
  *
  * Foreground service с типом camera: так Android разрешает держать камеру, пока пользователь
  * в других приложениях. Запускать только из видимой activity (MainActivity / ToggleActivity).
  *
  * Потоки: анализ кадров — cameraExecutor; результаты MediaPipe — его внутренний поток
- * (там же живёт GestureDetector); управление жизненным циклом — main.
+ * (там же живёт GestureEngine); управление жизненным циклом — main.
  */
 class GestureCameraService : LifecycleService() {
 
     private lateinit var settings: AirTouchSettings
-    private val detector = GestureDetector()
+    private val engine = GestureEngine()
     private val cameraExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     @Volatile private var tracker: HandTracker? = null
@@ -64,14 +69,26 @@ class GestureCameraService : LifecycleService() {
     @Volatile private var economy = false
     @Volatile private var handVisible = false
     @Volatile private var lastHandSeenAt = 0L
-    @Volatile private var lastActivityAt = 0L
+    @Volatile private var paused = false
+    /** Сброс движка просим у потока MediaPipe — он единственный, кто трогает engine. */
+    @Volatile private var resetRequested = false
     private var frameCounter = 0L   // только cameraExecutor
     private var lastTimestamp = 0L  // только cameraExecutor
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        detector.config = settings.swipeConfig()
-        if (key == AirTouchSettings.KEY_FRONT_CAMERA) bindCamera()
+        engine.config = settings.engineConfig()
+        if (key == AirTouchSettings.KEY_FRONT_CAMERA && !paused) bindCamera()
     }
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> pauseCamera()
+                Intent.ACTION_SCREEN_ON -> resumeCamera()
+            }
+        }
+    }
+    private var screenReceiverRegistered = false
 
     override fun onCreate() {
         super.onCreate()
@@ -111,13 +128,21 @@ class GestureCameraService : LifecycleService() {
             return
         }
 
-        detector.config = settings.swipeConfig()
-        detector.onHandLost()
+        engine.config = settings.engineConfig()
+        resetRequested = true
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        ContextCompat.registerReceiver(
+            this, screenReceiver,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        screenReceiverRegistered = true
 
-        val now = SystemClock.uptimeMillis()
-        lastHandSeenAt = now
-        lastActivityAt = now
+        lastHandSeenAt = SystemClock.uptimeMillis()
+        paused = false
         economy = false
         handVisible = false
         AirTouchState.update { AirTouchState.Status(mode = Mode.ACTIVE) }
@@ -130,6 +155,11 @@ class GestureCameraService : LifecycleService() {
         watchdog?.cancel()
         watchdog = null
         settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
+        if (screenReceiverRegistered) {
+            unregisterReceiver(screenReceiver)
+            screenReceiverRegistered = false
+        }
+        AirInputService.instance?.cancelTouch()
         cameraProvider?.unbindAll()
         cameraProvider = null
         tracker?.let { t -> cameraExecutor.execute { t.close() } } // после уже поставленных кадров
@@ -145,22 +175,37 @@ class GestureCameraService : LifecycleService() {
         shutdown(Mode.ERROR, message)
     }
 
-    /** Авто-эконом через 3 с без руки, авто-сон через 30 с без руки и жестов. */
+    /** Через 3 с без руки — экономичный режим (~7 FPS). Полностью не засыпаем, пока горит экран. */
     private fun startWatchdog() {
         watchdog = lifecycleScope.launch {
             while (isActive) {
                 delay(500)
-                val now = SystemClock.uptimeMillis()
-                if (!economy && now - lastHandSeenAt > Timeouts.NO_HAND_IDLE_MS) {
+                if (paused) continue
+                if (!economy && SystemClock.uptimeMillis() - lastHandSeenAt > Timeouts.NO_HAND_IDLE_MS) {
                     economy = true
-                    AirTouchState.update { it.copy(mode = Mode.IDLE, handVisible = false) }
-                }
-                if (now - maxOf(lastHandSeenAt, lastActivityAt) > Timeouts.AUTO_SLEEP_MS) {
-                    shutdown(Mode.SLEEPING)
-                    break
+                    AirTouchState.update { it.copy(mode = Mode.IDLE, handVisible = false, cursorVisible = false) }
                 }
             }
         }
+    }
+
+    private fun pauseCamera() {
+        if (!isRunning || paused) return
+        paused = true
+        resetRequested = true
+        handVisible = false
+        AirInputService.instance?.cancelTouch()
+        cameraProvider?.unbindAll()
+        AirTouchState.update { it.copy(mode = Mode.PAUSED, handVisible = false, cursorVisible = false) }
+    }
+
+    private fun resumeCamera() {
+        if (!isRunning || !paused) return
+        paused = false
+        economy = true // пока руки нет — экономно; появится рука — сразу полная частота
+        lastHandSeenAt = SystemClock.uptimeMillis()
+        AirTouchState.update { it.copy(mode = Mode.IDLE) }
+        bindCamera()
     }
 
     // ---------------- Камера ----------------
@@ -168,7 +213,7 @@ class GestureCameraService : LifecycleService() {
     private fun bindCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
-            if (!isRunning) return@addListener
+            if (!isRunning || paused) return@addListener
             val provider = try {
                 future.get()
             } catch (e: Exception) {
@@ -229,14 +274,19 @@ class GestureCameraService : LifecycleService() {
     // ---------------- Результаты MediaPipe (его поток) ----------------
 
     private fun onHand(frame: HandFrame?) {
-        if (!isRunning) return
+        if (!isRunning || paused) return
+        val input = AirInputService.instance
+        if (resetRequested) {
+            resetRequested = false
+            engine.onHandLost()?.let { input?.touch(it) }
+        }
         if (frame == null) {
             // При быстром махе MediaPipe может потерять смазанную руку на 1–3 кадра.
-            // Сбрасываем детектор, только если руки нет дольше HAND_LOST_GRACE_MS.
+            // Сбрасываем движок, только если руки нет дольше HAND_LOST_GRACE_MS.
             if (handVisible && SystemClock.uptimeMillis() - lastHandSeenAt > Timeouts.HAND_LOST_GRACE_MS) {
                 handVisible = false
-                detector.onHandLost()
-                AirTouchState.update { it.copy(handVisible = false, pose = null) }
+                engine.onHandLost()?.let { input?.touch(it) }
+                AirTouchState.update { it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false) }
             }
             return
         }
@@ -246,21 +296,25 @@ class GestureCameraService : LifecycleService() {
         handVisible = true
         economy = false
 
-        val gesture = detector.process(frame)
-        if (gesture != null) {
-            lastActivityAt = now
-            AirInputService.instance?.perform(gesture)
-        }
-        val palm = detector.lastPalm
+        val out = engine.process(frame)
+        out.swipe?.let { input?.perform(it) }
+        out.touch?.let { input?.touch(it) }
+
+        val palm = engine.lastPalm
+        val cursor = engine.cursor
         AirTouchState.update { s ->
             s.copy(
                 mode = Mode.ACTIVE,
                 handVisible = true,
-                pose = detector.lastPose,
+                pose = engine.lastPose,
                 palmX = palm?.x ?: s.palmX,
                 palmY = palm?.y ?: s.palmY,
-                lastGesture = gesture ?: s.lastGesture,
-                lastGestureAt = if (gesture != null) now else s.lastGestureAt,
+                cursorVisible = cursor != null,
+                cursorX = cursor?.x ?: s.cursorX,
+                cursorY = cursor?.y ?: s.cursorY,
+                pinching = cursor?.pinching == true,
+                lastGesture = out.swipe ?: s.lastGesture,
+                lastGestureAt = if (out.swipe != null) now else s.lastGestureAt,
             )
         }
     }

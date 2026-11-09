@@ -65,7 +65,7 @@ class OverlayController(private val service: AccessibilityService) {
                 Mode.OFF -> 0x99505560.toInt()
                 Mode.ACTIVE -> if (status.handVisible) 0xE616A34A.toInt() else 0xE622C55E.toInt()
                 Mode.IDLE -> 0xE6F59E0B.toInt()
-                Mode.SLEEPING -> 0xCC3B82F6.toInt()
+                Mode.PAUSED -> 0xCC3B82F6.toInt()
                 Mode.ERROR -> 0xE6DC2626.toInt()
             },
         )
@@ -153,7 +153,7 @@ class OverlayController(private val service: AccessibilityService) {
     }
 }
 
-/** Точка-трекер ладони + вспышка при срабатывании жеста + плашка «мало света». */
+/** Курсор, точка-трекер ладони, вспышка при свайпе и плашка «мало света». */
 private class TrackerView(context: Context) : View(context) {
 
     private val d = resources.displayMetrics.density
@@ -167,6 +167,11 @@ private class TrackerView(context: Context) : View(context) {
     private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); textSize = 28 * d; textAlign = Paint.Align.CENTER; isFakeBoldText = true
     }
+    private val cursorRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 3 * d; color = 0xFFFFFFFF.toInt()
+    }
+    private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x993B82F6.toInt() }
+    private val cursorPressed = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
     private val bannerBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6B45309.toInt() }
     private val bannerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); textSize = 14 * d; textAlign = Paint.Align.CENTER
@@ -190,6 +195,20 @@ private class TrackerView(context: Context) : View(context) {
         }
 
         if (s.mode != Mode.ACTIVE || !s.handVisible) return
+
+        if (s.cursorVisible) {
+            val cx = s.cursorX * width
+            val cy = s.cursorY * height
+            if (s.pinching) {
+                canvas.drawCircle(cx, cy, 11 * d, cursorPressed)
+                canvas.drawCircle(cx, cy, 11 * d, cursorRing)
+            } else {
+                canvas.drawCircle(cx, cy, 16 * d, cursorFill)
+                canvas.drawCircle(cx, cy, 16 * d, cursorRing)
+            }
+            return
+        }
+
         val x = s.palmX * width
         val y = s.palmY * height
 

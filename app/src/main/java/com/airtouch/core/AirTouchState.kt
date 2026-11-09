@@ -18,8 +18,8 @@ object AirTouchState {
         ACTIVE,
         /** Руки нет > [Timeouts.NO_HAND_IDLE_MS]: обрабатываем каждый N-й кадр, точка скрыта. */
         IDLE,
-        /** Авто-сон: камера выключена, включить можно плавающей кнопкой. */
-        SLEEPING,
+        /** Экран выключен: камера на паузе, включится сама вместе с экраном. */
+        PAUSED,
         ERROR,
     }
 
@@ -32,11 +32,16 @@ object AirTouchState {
         val lowLight: Boolean = false,
         /** Что сейчас видит камера — для подсказки в приложении. */
         val pose: HandPose? = null,
+        /** Курсор (режим курсора), доли экрана. */
+        val cursorVisible: Boolean = false,
+        val cursorX: Float = 0.5f,
+        val cursorY: Float = 0.5f,
+        val pinching: Boolean = false,
         val lastGesture: AirGesture? = null,
         val lastGestureAt: Long = 0L,
         val error: String? = null,
     ) {
-        val isRunning: Boolean get() = mode == Mode.ACTIVE || mode == Mode.IDLE
+        val isRunning: Boolean get() = mode == Mode.ACTIVE || mode == Mode.IDLE || mode == Mode.PAUSED
     }
 
     private val _status = MutableStateFlow(Status())
@@ -49,8 +54,6 @@ object AirTouchState {
 object Timeouts {
     /** Рука не видна столько — переходим в экономичный режим. */
     const val NO_HAND_IDLE_MS = 3_000L
-    /** Ни руки, ни жестов столько — камера полностью выключается. (В промпте было 10 с — слишком мало, чтобы приноровиться.) */
-    const val AUTO_SLEEP_MS = 30_000L
     /** Рука пропала меньше чем на столько — считаем, что это смаз кадра, а не уход из кадра. */
     const val HAND_LOST_GRACE_MS = 300L
     /** В экономичном режиме обрабатываем каждый N-й кадр (~7 FPS вместо 30). */
