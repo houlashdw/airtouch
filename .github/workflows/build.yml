@@ -96,7 +96,7 @@ jobs:
           git config user.email "ci@users.noreply.github.com"
           mkdir -p /tmp/rep
           cp e2e.log /tmp/rep/ 2>/dev/null || echo "no e2e.log" > /tmp/rep/e2e.log
-          grep -E "AirTouch|AndroidRuntime|TestRunner|AccessibilityService" logcat.txt | tail -n 3000 > /tmp/rep/logcat.txt 2>/dev/null || true
+          grep -E "AirTouch|TestRunner|AccessibilityService|MotionEventInjector|InputDispatcher|AccessibilityInputFilter" logcat.txt | tail -n 3000 > /tmp/rep/logcat.txt 2>/dev/null || true
           cp screen.png /tmp/rep/ 2>/dev/null || true
           find app/build/outputs/androidTest-results -name "*.xml" -exec cp {} /tmp/rep/ \; 2>/dev/null || true
           if [ -f e2e_failed ] || [ "${{ steps.emu.outcome }}" != "success" ]; then echo FAILED > /tmp/rep/RESULT; else echo PASSED > /tmp/rep/RESULT; fi

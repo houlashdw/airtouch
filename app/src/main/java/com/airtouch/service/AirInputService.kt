@@ -202,16 +202,36 @@ class AirInputService : AccessibilityService() {
     }
 
     /**
-     * Виртуальные пальцы на экране (1 — перетаскивание, 2 — масштаб): цепочка коротких штрихов,
-     * каждый продолжает предыдущий (willContinue). Следующий кусок отправляется, когда система
-     * закончила предыдущий (onCompleted), поэтому пальцы не отрываются, пока сессия не завершена.
+     * Виртуальный палец на экране на время щипка.
+     *
+     * Живой режим: цепочка коротких штрихов, каждый продолжает предыдущий (willContinue);
+     * следующий кусок отправляется, когда система закончила предыдущий.
+     *
+     * Страховка: Android обрывает «продолжаемый» жест, если в паузе между кусками приходит любой
+     * посторонний ввод. Поэтому весь путь руки записывается, и если касание оборвали — при отпускании
+     * щипка весь росчерк воспроизводится одним цельным жестом с той же траекторией и скоростью
+     * (листание, флик и долгое нажатие срабатывают в любом случае).
      */
     private inner class TouchSession(start: List<PointF>) {
         private var last = start
         private var target = start
         private var ending = false
         private var finished = false
+        private var broken = false
+        private var replayed = false
         private var strokes: List<GestureDescription.StrokeDescription> = emptyList()
+        private val trail = ArrayList<PointF>()
+        private val trailT = ArrayList<Long>()
+
+        init {
+            record(start)
+        }
+
+        private fun record(points: List<PointF>) {
+            val p = points.firstOrNull() ?: return
+            trail += PointF(p.x, p.y)
+            trailT += android.os.SystemClock.uptimeMillis()
+        }
 
         fun begin() {
             strokes = last.map { p ->
@@ -221,17 +241,24 @@ class AirInputService : AccessibilityService() {
         }
 
         fun moveTo(points: List<PointF>) {
-            if (points.size == last.size) target = points
+            if (points.size != last.size || ending) return
+            target = points
+            record(points)
         }
 
         /** points == null — отпустить там, где пальцы сейчас. */
         fun end(points: List<PointF>?) {
-            if (points != null && points.size == last.size) target = points
+            if (ending) return
+            if (points != null && points.size == last.size) {
+                target = points
+                record(points)
+            }
             ending = true
+            if (broken) replay()
         }
 
         private fun next() {
-            if (finished || strokes.isEmpty()) return
+            if (finished || broken || strokes.isEmpty()) return
             val from = last
             val to = target
             val isFinal = ending
@@ -259,78 +286,38 @@ class AirInputService : AccessibilityService() {
                     }
                     override fun onCancelled(gestureDescription: GestureDescription?) {
                         Stats.segmentsCancelled++
-                        Log.w(TAG, "touch segment cancelled (ending=$ending)")
-                        finished = true
+                        Log.w(TAG, "touch segment cancelled (ending=$ending) — will replay on release")
+                        broken = true
+                        if (ending) replay()
                     }
                 },
                 main,
             )
             if (!ok) {
                 Stats.dispatchFailed++
-                Log.w(TAG, "dispatchGesture rejected")
-                finished = true
-            }
-        }
-    }
-
-    /**
-     * Печать в поле ввода через специальные возможности: читаем текст и позицию курсора,
-     * вставляем/стираем и ставим курсор после вставки. Работает в обычных полях; в некоторых
-     * веб-страницах и играх поля «нестандартные» — там текст может не вставиться.
-     */
-    private inner class FocusedFieldSink : TextSink {
-        private fun field(): AccessibilityNodeInfo? =
-            findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.also { it.refresh() }?.takeIf { it.isEditable && !it.isPassword }
-
-        private fun state(n: AccessibilityNodeInfo): Triple<String, Int, Int> {
-            val text = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
-            var start = n.textSelectionStart
-            var end = n.textSelectionEnd
-            if (start < 0 || start > text.length) start = text.length
-            if (end < start || end > text.length) end = start
-            return Triple(text, start, end)
-        }
-
-        override fun textBeforeCursor(): String? {
-            val n = field() ?: return null
-            val (text, start, _) = state(n)
-            return text.substring(0, start)
-        }
-
-        override fun insert(text: String) {
-            val n = field() ?: return
-            val (cur, start, end) = state(n)
-            set(n, cur.substring(0, start) + text + cur.substring(end), start + text.length)
-        }
-
-        override fun deleteBefore(count: Int) {
-            val n = field() ?: return
-            val (cur, start, end) = state(n)
-            if (start != end) {
-                set(n, cur.removeRange(start, end), start)
-            } else {
-                val from = (start - count).coerceAtLeast(0)
-                set(n, cur.removeRange(from, start), from)
+                broken = true
+                if (ending) replay()
             }
         }
 
-        override fun enter() {
-            field()?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
-        }
-
-        private fun set(n: AccessibilityNodeInfo, text: String, cursor: Int) {
-            n.performAction(
-                AccessibilityNodeInfo.ACTION_SET_TEXT,
-                Bundle().apply {
-                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
-                },
-            )
-            n.performAction(
-                AccessibilityNodeInfo.ACTION_SET_SELECTION,
-                Bundle().apply {
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
-                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
-                },
+        /** Воспроизвести весь записанный росчерк одним жестом. */
+        private fun replay() {
+            if (replayed || trail.isEmpty() || last.size != 1) return
+            replayed = true
+            finished = true
+            val path = Path().apply {
+                moveTo(trail[0].x, trail[0].y)
+                for (i in 1 until trail.size) {
+                    if (trail[i].x != trail[i - 1].x || trail[i].y != trail[i - 1].y) lineTo(trail[i].x, trail[i].y)
+                }
+            }
+            val duration = (trailT.last() - trailT.first()).coerceIn(REPLAY_MIN_MS, REPLAY_MAX_MS)
+            Stats.replays++
+            dispatchGesture(
+                GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
+                    .build(),
+                null, null,
             )
         }
     }
@@ -340,7 +327,9 @@ class AirInputService : AccessibilityService() {
         @Volatile var segmentsCompleted = 0
         @Volatile var segmentsCancelled = 0
         @Volatile var dispatchFailed = 0
-        override fun toString() = "segments ok=$segmentsCompleted cancelled=$segmentsCancelled rejected=$dispatchFailed"
+        @Volatile var replays = 0
+        override fun toString() =
+            "segments ok=$segmentsCompleted cancelled=$segmentsCancelled rejected=$dispatchFailed replays=$replays"
     }
 
     companion object {
@@ -348,6 +337,8 @@ class AirInputService : AccessibilityService() {
         private const val TAP_MS = 50L
         /** Длина одного куска перетаскивания; ~частота кадров камеры. */
         private const val SEGMENT_MS = 40L
+        private const val REPLAY_MIN_MS = 60L
+        private const val REPLAY_MAX_MS = 5000L
 
         @Volatile
         var instance: AirInputService? = null
