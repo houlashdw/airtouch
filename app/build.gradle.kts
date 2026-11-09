@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.net.URI
 
 plugins {
     id("com.android.application")
@@ -57,7 +58,7 @@ val downloadHandModel by tasks.registering {
     doLast {
         val target = handModelFile.asFile
         target.parentFile.mkdirs()
-        java.net.URI(handModelUrl).toURL().openStream().use { input ->
+        URI(handModelUrl).toURL().openStream().use { input ->
             target.outputStream().use { output -> input.copyTo(output) }
         }
         logger.lifecycle("Downloaded hand_landmarker.task (${target.length() / 1024} KB)")
