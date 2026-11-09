@@ -38,6 +38,9 @@ class HandFrame(
     val landmarks: List<Landmark>,
     val imageWidth: Int = 480,
     val imageHeight: Int = 640,
+    /** Название жеста от обученной модели MediaPipe Gesture Recognizer ("Victory", "Open_Palm"…), если есть. */
+    val label: String? = null,
+    val labelScore: Float = 0f,
 ) {
     init {
         require(landmarks.size == Lm.COUNT) { "MediaPipe hand has ${Lm.COUNT} landmarks, got ${landmarks.size}" }

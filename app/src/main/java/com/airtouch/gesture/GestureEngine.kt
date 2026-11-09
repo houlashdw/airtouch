@@ -1,31 +1,22 @@
 package com.airtouch.gesture
 
-import kotlin.math.abs
-
-/** Системные кнопки, которые вызываются жестами-удержаниями. */
+/** Системные кнопки, которые вызываются жестами. */
 enum class SystemAction { HOME, BACK, RECENTS }
 
-/** Масштаб «нолик + к себе/от себя». factor > 1 — увеличить, < 1 — уменьшить (относительно начала). */
-sealed interface ZoomEvent {
-    data object Start : ZoomEvent
-    data class Update(val factor: Float) : ZoomEvent
-    data object End : ZoomEvent
-}
-
-/** Идёт удержание позы: кольцо на экране заполняется [progress] 0..1. */
+/** Идёт удержание: кольцо на экране заполняется [progress] 0..1. */
 data class Hold(val action: SystemAction, val progress: Float)
 
 data class EngineConfig(
     val swipe: SwipeConfig = SwipeConfig(),
-    /** Палец/щипок управляют курсором. Выключено — палец тоже машет. */
-    val cursorEnabled: Boolean = true,
+    /** Режим курсора: ☝️ палец — курсор, 🤏 щипок — нажатие. Выключен — все позы машут. */
+    val cursorEnabled: Boolean = false,
     val cursor: CursorConfig = CursorConfig(),
-    val homeHoldMs: Long = 600,
+    val poke: PokeConfig = PokeConfig(),
+    /** ✌️ неподвижно столько — «назад». */
     val backHoldMs: Long = 450,
-    val recentsHoldMs: Long = 900,
-    /** Изменение размера руки (к камере/от камеры), после которого «нолик» = масштаб, а не «домой». */
-    val zoomStartChange: Float = 0.12f,
-    /** Сколько кадров «чужой» позы терпим внутри жеста (позы на границе иногда мигают). */
+    /** Насколько «V» может сдвинуться и всё ещё считаться неподвижной (доли короткой стороны кадра). */
+    val backMaxDrift: Float = 0.06f,
+    /** Сколько кадров «чужой» позы терпим внутри удержания «V». */
     val poseToleranceFrames: Int = 2,
 )
 
@@ -33,47 +24,36 @@ data class EngineOutput(
     val swipe: AirGesture? = null,
     val touch: TouchEvent? = null,
     val action: SystemAction? = null,
-    val zoom: ZoomEvent? = null,
     val hold: Hold? = null,
 )
 
 /**
- * Разводит жесты по позам, чтобы они не путались:
+ * Жесты построены на ДВИЖЕНИИ, а не на форме руки — так их невозможно спутать:
  *
- * | Поза                                | Жест                                              |
- * |-------------------------------------|---------------------------------------------------|
- * | ✋ ладонь                           | мах = свайп ←→↑↓                                  |
- * | ☝️ указательный                     | курсор                                            |
- * | 🤏 щипок (большой + указательный)   | тап / вести = прокрутка / держать = долгое нажатие |
- * | 👌 «нолик» (щипок + 3 пальца вверх) | держать = домой; к себе/от себя = масштаб          |
- * | ✌️ «V»                              | держать = назад                                   |
- * | ✊ кулак                            | держать = недавние приложения                     |
+ * | Движение                         | Действие                 |
+ * |----------------------------------|--------------------------|
+ * | мах любой формой руки            | свайп ←→↑↓               |
+ * | тык (рука к экрану и обратно)    | домой                    |
+ * | тык и задержать руку у экрана    | недавние приложения      |
+ * | ✌️ неподвижно                    | назад                    |
+ * | режим курсора: ☝️ / 🤏           | курсор / нажатие, прокрутка, долгое нажатие |
  *
- * Начатый жест (щипок, «нолик», удержание) не прерывается из-за 1–2 кадров с другой позой.
+ * Приоритет: тык > курсор > мах > «V». Во время тыка махи не ловятся.
  */
 class GestureEngine(config: EngineConfig = EngineConfig()) {
 
     @Volatile
     var config: EngineConfig = config
 
-    private enum class Route { NONE, SWIPE, CURSOR, OK, HOLD_BACK, HOLD_RECENTS }
-
     private val swipes = GestureDetector()
     private val pointer = PinchCursor()
+    private val poke = PokeDetector()
+    private var cursorMode = false
 
-    private var route = Route.NONE
-    private var mismatch = 0
-
-    // «нолик»
-    private var okStartT = 0L
-    private var okStartScale = 0f
-    private var okScale = 0f
-    private var zoomBase = 0f
-    private var zooming = false
-
-    // удержания
-    private var holdStartT = 0L
-    private var fired = false
+    private var vSince: Long? = null
+    private var vStart: Pair<Float, Float>? = null
+    private var vFired = false
+    private var vMismatch = 0
 
     /** Центр ладони (кадр, 0..1) — для точки-трекера и кольца удержания. */
     var palm: Landmark? = null
@@ -83,144 +63,95 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         private set
 
     /** Курсор, если сейчас курсорный режим, иначе null. */
-    val cursor: Cursor? get() = if (route == Route.CURSOR) pointer.cursor else null
-
-    val isZooming: Boolean get() = route == Route.OK && zooming
+    val cursor: Cursor? get() = if (cursorMode) pointer.cursor else null
 
     /** Первый кадр без руки: если это был резкий мах за край кадра — засчитать. */
     fun onHandMissing(t: Long): EngineOutput =
-        if (route == Route.SWIPE) EngineOutput(swipe = swipes.checkExitFlick(t)) else EngineOutput()
+        if (!cursorMode) EngineOutput(swipe = swipes.checkExitFlick(t)) else EngineOutput()
 
     /** Рука ушла из кадра: закрыть все незавершённые жесты. */
     fun onHandLost(): EngineOutput {
-        val out = endRoute()
+        val up = pointer.reset()
+        cursorMode = false
         swipes.onHandLost()
+        poke.reset()
+        resetV()
         palm = null
-        return out
+        return EngineOutput(touch = up)
     }
 
     fun process(frame: HandFrame): EngineOutput {
         val cfg = config
-        swipes.config = cfg.swipe.copy(fingerSwipes = !cfg.cursorEnabled)
+        val t = frame.timestampMs
+        swipes.config = cfg.swipe.copy(anyPose = true)
         pointer.config = cfg.cursor
+        poke.config = cfg.poke
 
         val pose = HandPoseClassifier.classify(frame)
-        val ext = HandPoseClassifier.extendedFingers(frame)
-        val pinch = PinchCursor.isPinchShape(frame, cfg.cursor.pinchOn)
-        val okShape = pinch && ext[1] && ext[2] && ext[3]
-        val wanted = when {
-            okShape -> Route.OK
-            pinch -> if (cfg.cursorEnabled) Route.CURSOR else Route.NONE
-            pose == HandPose.OPEN_PALM -> Route.SWIPE
-            pose == HandPose.V_SIGN -> Route.HOLD_BACK
-            pose == HandPose.FIST -> Route.HOLD_RECENTS
-            cfg.cursorEnabled -> Route.CURSOR
-            else -> Route.SWIPE // курсор выключен: палец тоже машет
-        }
-
-        var prefix = EngineOutput()
-        if (wanted == route) {
-            mismatch = 0
-        } else {
-            // Не бросаем начатый жест: щипок держим до разжатия, удержания терпят 1–2 «мигания» позы.
-            val keep = when (route) {
-                Route.CURSOR -> pointer.isTouching
-                Route.OK, Route.HOLD_BACK, Route.HOLD_RECENTS -> ++mismatch <= cfg.poseToleranceFrames
-                else -> false
-            }
-            if (!keep) {
-                prefix = endRoute()
-                startRoute(wanted, frame)
-            }
-        }
         lastPose = pose
+        palm = frame.palmCenter
 
-        val out = when (route) {
-            Route.SWIPE -> EngineOutput(swipe = swipes.process(frame))
-            Route.CURSOR -> EngineOutput(touch = pointer.process(frame))
-            Route.OK -> processOk(frame, cfg)
-            Route.HOLD_BACK -> processHold(frame.timestampMs, SystemAction.BACK, cfg.backHoldMs)
-            Route.HOLD_RECENTS -> processHold(frame.timestampMs, SystemAction.RECENTS, cfg.recentsHoldMs)
-            Route.NONE -> EngineOutput()
+        // 1. Тык — любой формой руки. Пока он идёт, всё остальное молчит.
+        val pk = poke.process(frame)
+        if (pk.active || pk.action != null) {
+            swipes.disarm()
+            resetV()
+            val up = if (cursorMode && !pointer.isTouching) leaveCursor() else null
+            return EngineOutput(touch = up, action = pk.action, hold = pk.hold)
         }
-        palm = if (route == Route.SWIPE) swipes.lastPalm else frame.palmCenter
-        return merge(prefix, out)
-    }
 
-    private fun startRoute(r: Route, frame: HandFrame) {
-        route = r
-        mismatch = 0
-        fired = false
-        when (r) {
-            Route.OK -> {
-                okStartT = frame.timestampMs
-                okStartScale = handScale(frame)
-                okScale = okStartScale
-                zooming = false
-            }
-            Route.HOLD_BACK, Route.HOLD_RECENTS -> holdStartT = frame.timestampMs
-            else -> Unit
-        }
-    }
-
-    /** Закрыть текущий жест: отпустить палец, закончить масштаб. */
-    private fun endRoute(): EngineOutput {
-        val out = when (route) {
-            Route.CURSOR -> EngineOutput(touch = pointer.reset())
-            Route.OK -> if (zooming) EngineOutput(zoom = ZoomEvent.End) else EngineOutput()
-            Route.SWIPE -> {
+        // 2. Режим курсора: палец или щипок.
+        val pinch = PinchCursor.isPinchShape(frame, cfg.cursor.pinchOn)
+        if (cfg.cursorEnabled && (pointer.isTouching || pinch || pose == HandPose.POINTING)) {
+            if (!cursorMode) {
+                cursorMode = true
                 swipes.disarm()
-                EngineOutput()
             }
-            else -> EngineOutput()
+            resetV()
+            return EngineOutput(touch = pointer.process(frame))
         }
-        if (route == Route.CURSOR) pointer.reset()
-        zooming = false
-        route = Route.NONE
-        mismatch = 0
-        return out
+        val up = if (cursorMode) leaveCursor() else null
+
+        // 3. Мах любой формой.
+        val swipe = swipes.process(frame)
+        palm = swipes.lastPalm ?: palm
+
+        // 4. ✌️ неподвижно — назад.
+        var action: SystemAction? = null
+        var hold: Hold? = null
+        if (pose == HandPose.V_SIGN && swipe == null) {
+            vMismatch = 0
+            val p = frame.palmCenter.x * frame.xScale to frame.palmCenter.y * frame.yScale
+            val start = vStart
+            if (vSince == null || start == null ||
+                kotlin.math.hypot(p.first - start.first, p.second - start.second) > cfg.backMaxDrift
+            ) {
+                vSince = t
+                vStart = p
+            }
+            val progress = (t - vSince!!).toFloat() / cfg.backHoldMs
+            if (!vFired && progress >= 1f) {
+                vFired = true
+                action = SystemAction.BACK
+            } else if (!vFired && t - vSince!! > 120) {
+                hold = Hold(SystemAction.BACK, progress)
+            }
+        } else if (++vMismatch > cfg.poseToleranceFrames || swipe != null) {
+            resetV()
+        }
+
+        return EngineOutput(swipe = swipe, touch = up, action = action, hold = hold)
     }
 
-    private fun processOk(frame: HandFrame, cfg: EngineConfig): EngineOutput {
-        val t = frame.timestampMs
-        okScale += 0.5f * (handScale(frame) - okScale)
-        if (fired) return EngineOutput()
-
-        if (!zooming && abs(okScale / okStartScale - 1f) > cfg.zoomStartChange) {
-            zooming = true
-            zoomBase = okScale
-            return EngineOutput(zoom = ZoomEvent.Start)
-        }
-        if (zooming) {
-            val r = okScale / zoomBase
-            return EngineOutput(zoom = ZoomEvent.Update((r * r).coerceIn(0.25f, 4f)))
-        }
-        val progress = (t - okStartT).toFloat() / cfg.homeHoldMs
-        if (progress >= 1f) {
-            fired = true
-            return EngineOutput(action = SystemAction.HOME)
-        }
-        return EngineOutput(hold = Hold(SystemAction.HOME, progress))
+    private fun leaveCursor(): TouchEvent? {
+        cursorMode = false
+        return pointer.reset()
     }
 
-    private fun processHold(t: Long, action: SystemAction, needMs: Long): EngineOutput {
-        if (fired) return EngineOutput()
-        val progress = (t - holdStartT).toFloat() / needMs
-        if (progress >= 1f) {
-            fired = true
-            return EngineOutput(action = action)
-        }
-        return EngineOutput(hold = Hold(action, progress))
+    private fun resetV() {
+        vSince = null
+        vStart = null
+        vFired = false
+        vMismatch = 0
     }
-
-    /** Размер руки в кадре: растёт, когда рука приближается к камере. */
-    private fun handScale(frame: HandFrame): Float = frame.dist(Lm.WRIST, Lm.MIDDLE_MCP).coerceAtLeast(1e-4f)
-
-    private fun merge(a: EngineOutput, b: EngineOutput) = EngineOutput(
-        swipe = b.swipe ?: a.swipe,
-        touch = a.touch ?: b.touch, // Up старого жеста важнее
-        action = b.action ?: a.action,
-        zoom = a.zoom ?: b.zoom,
-        hold = b.hold,
-    )
 }

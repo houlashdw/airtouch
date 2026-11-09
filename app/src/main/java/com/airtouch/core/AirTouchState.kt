@@ -41,7 +41,9 @@ object AirTouchState {
         /** Идёт удержание позы (кольцо на экране). */
         val holdAction: SystemAction? = null,
         val holdProgress: Float = 0f,
-        val zooming: Boolean = false,
+        /** Реальная частота обработки кадров и задержка распознавания — для диагностики «тормозов». */
+        val fps: Int = 0,
+        val latencyMs: Int = 0,
         val lastAction: SystemAction? = null,
         val lastActionAt: Long = 0L,
         val lastGesture: AirGesture? = null,
@@ -63,8 +65,8 @@ object Timeouts {
     const val NO_HAND_IDLE_MS = 3_000L
     /** Рука пропала меньше чем на столько — считаем, что это смаз кадра, а не уход из кадра. */
     const val HAND_LOST_GRACE_MS = 300L
-    /** В экономичном режиме обрабатываем каждый N-й кадр (~7 FPS вместо 30). */
-    const val ECONOMY_FRAME_STRIDE = 4L
+    /** В экономичном режиме обрабатываем каждый N-й кадр (~15 FPS вместо 30) — руку подхватываем быстро. */
+    const val ECONOMY_FRAME_STRIDE = 2L
     /** Проверяем освещённость раз в N кадров. */
     const val LUMA_EVERY_N_FRAMES = 15L
     /** Средняя яркость 0..255, ниже которой предупреждаем о слабом свете. */

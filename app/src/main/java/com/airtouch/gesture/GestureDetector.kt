@@ -65,6 +65,8 @@ data class SwipeConfig(
     val enableVertical: Boolean = true,
     /** true — махать можно и пальцем; false — только ладонью (палец занят курсором). */
     val fingerSwipes: Boolean = true,
+    /** Махи любой формой руки (кулак, два пальца…): важно только движение. */
+    val anyPose: Boolean = false,
     val activationZone: ActivationZone = ActivationZone.FULL,
 ) {
     val requiredDistance: Float get() = baseDistance / sensitivity.coerceIn(0.25f, 4f)
@@ -192,7 +194,11 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
             stillSince = null
         }
 
-        val poseOk = if (cfg.fingerSwipes) pose != HandPose.FIST else pose == HandPose.OPEN_PALM
+        val poseOk = when {
+            cfg.anyPose -> true
+            cfg.fingerSwipes -> pose != HandPose.FIST
+            else -> pose == HandPose.OPEN_PALM
+        }
         if (!poseOk || !cfg.activationZone.contains(raw.y)) {
             history.clear()
             validSince = null

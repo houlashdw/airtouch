@@ -10,6 +10,8 @@ fun syntheticHand(
     extended: BooleanArray = booleanArrayOf(true, true, true, true),
     s: Float = 0.15f,
     pinch: Boolean = false,
+    /** <1 — кисть наклонена к/от камеры: ладонь «короче» по вертикали, ширина та же. */
+    tiltY: Float = 1f,
 ): List<Landmark> {
     val pts = MutableList(Lm.COUNT) { Landmark(cx, cy) }
     pts[Lm.WRIST] = Landmark(cx, cy + 0.5f * s)
@@ -30,6 +32,7 @@ fun syntheticHand(
             pts[base + 3] = Landmark(x, cy - 0.05f * s)
         }
     }
+    if (tiltY != 1f) for (i in pts.indices) pts[i] = Landmark(pts[i].x, cy + (pts[i].y - cy) * tiltY)
     if (pinch) {
         val tip = pts[Lm.INDEX_TIP]
         pts[Lm.THUMB_TIP] = Landmark(tip.x - 0.03f * s, tip.y + 0.03f * s)

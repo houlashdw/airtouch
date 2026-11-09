@@ -159,16 +159,12 @@ private fun AirTouchScreen() {
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Жесты", style = MaterialTheme.typography.titleMedium)
-                    Text("✋ Ладонь, быстрый мах — листать ←→↑↓")
-                    Text("☝️ Указательный палец — курсор")
-                    Text("🤏 Щипок (большой + указательный, остальные согнуты) — нажать")
-                    Text("🤏 Щипок и вести — прокрутка / перетаскивание")
-                    Text("🤏 Щипок и держать — долгое нажатие")
-                    Text("👌 «Нолик» (щипок, три пальца вверх) держать — домой")
-                    Text("👌 «Нолик» и отвести руку к себе — уменьшить, к телефону — увеличить")
-                    Text("✌️ «V» держать — назад")
-                    Text("✊ Кулак держать 1 с — недавние приложения")
-                    Text("Удержание показывает кольцо — передумали, смените позу, пока кольцо не замкнулось.",
+                    Text("👋 Мах любой формой руки — листать ←→↑↓")
+                    Text("👉 Тык (рука к экрану и обратно) — домой")
+                    Text("👉 Тык и задержать руку у экрана — недавние приложения")
+                    Text("✌️ «V» неподвижно полсекунды — назад")
+                    Text("☝️🤏 Курсор и щипок — включаются отдельно в настройках")
+                    Text("Удержание показывает кольцо — передумали, уберите руку, пока кольцо не замкнулось.",
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -180,6 +176,7 @@ private fun AirTouchScreen() {
                     Text("• Покажите руку, затем мах. Подъём руки в кадр не считается.")
                     Text("• Листать подряд можно без пауз; в обратную сторону — задержите руку на миг.")
                     Text("• Резкий мах «за край кадра» тоже засчитывается.")
+                    Text("• Тык — короткое движение всей рукой к телефону, сантиметров на 10.")
                     Text("• В темноте точность падает — включите свет.")
                 }
             }
@@ -240,23 +237,37 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
             }
             if (status.mode == Mode.ACTIVE) {
                 val seen = when {
-                    status.holdAction == SystemAction.HOME -> "нолик 👌 — держите: домой"
-                    status.holdAction == SystemAction.BACK -> "V ✌️ — держите: назад"
-                    status.holdAction == SystemAction.RECENTS -> "кулак ✊ — держите: недавние"
-                    status.zooming -> "нолик 👌 — масштаб"
+                    status.holdAction == SystemAction.BACK -> "✌️ держите — назад"
+                    status.holdAction == SystemAction.RECENTS -> "тык — держите руку: недавние"
                     status.cursorVisible && status.pinching -> "щипок 🤏 — нажатие"
                     status.cursorVisible -> "палец ☝️ — курсор"
-                    else -> when (status.pose) {
-                        HandPose.OPEN_PALM -> "ладонь ✋ — можно махать"
-                        HandPose.POINTING -> "палец ☝️ — можно махать"
-                        HandPose.V_SIGN, HandPose.OTHER -> "руку — можно махать"
-                        HandPose.FIST -> "кулак ✊"
-                        null -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
-                    }
+                    status.pose == HandPose.V_SIGN -> "✌️ — замрите, чтобы «назад»"
+                    status.pose != null -> "руку — машите или тыкайте"
+                    else -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
                 }
                 Text("Вижу: $seen")
             }
-            if (lastGesture != null) Text("Последний жест: $lastGesture")
+            if (lastGesture != null) Text("Последний мах: $lastGesture")
+            val lastAction = when (status.lastAction) {
+                SystemAction.HOME -> "домой"
+                SystemAction.BACK -> "назад"
+                SystemAction.RECENTS -> "недавние"
+                null -> null
+            }
+            if (lastAction != null) Text("Последнее действие: $lastAction")
+            if (status.mode == Mode.ACTIVE || status.mode == Mode.IDLE) {
+                val fpsNote = when {
+                    status.fps == 0 -> ""
+                    status.fps < 15 -> " — мало! Камера/процессор не успевают"
+                    status.fps < 24 -> " — средне"
+                    else -> " — хорошо"
+                }
+                Text(
+                    "Камера: ${status.fps} кадров/с$fpsNote" +
+                        if (status.latencyMs > 0) ", распознавание ${status.latencyMs} мс" else "",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Button(onClick = onToggle, enabled = ready || status.isRunning, modifier = Modifier.fillMaxWidth()) {
                 Text(if (status.isRunning) "Выключить" else "Включить")
             }
@@ -295,8 +306,8 @@ private fun SettingsCard(settings: AirTouchSettings) {
 
             SwitchRow(
                 title = "Режим курсора",
-                subtitle = "Палец — курсор. Щипок (большой + указательный) — нажать, " +
-                    "щипок и вести — прокрутка, щипок и держать — долгое нажатие. Ладонь — махи.",
+                subtitle = "☝️ палец — курсор, 🤏 щипок — нажать, щипок и вести — прокрутка, " +
+                    "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
 

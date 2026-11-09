@@ -3,80 +3,164 @@ package com.airtouch.gesture
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Курсор, щипок и разделение жестов, чтобы они не путались между собой. */
+/** Новая схема: жесты по движению — мах любой формой, тык, «V» неподвижно, курсор отдельным режимом. */
 class GestureEngineTest {
 
     private val palm = booleanArrayOf(true, true, true, true)
     private val finger = booleanArrayOf(true, false, false, false)
+    private val vSign = booleanArrayOf(true, true, false, false)
+    private val three = booleanArrayOf(true, true, true, false)
     private val fist = booleanArrayOf(false, false, false, false)
 
-    private inner class Sim(cursor: Boolean) {
+    private inner class Sim(cursor: Boolean = false) {
         val engine = GestureEngine(EngineConfig(cursorEnabled = cursor))
         val swipes = mutableListOf<AirGesture>()
         val touches = mutableListOf<TouchEvent>()
         val actions = mutableListOf<SystemAction>()
-        val zooms = mutableListOf<ZoomEvent>()
         var t = 0L
         var x = 0.5f
         var y = 0.5f
         var size = 0.15f
+        var tilt = 1f
 
         fun collect(out: EngineOutput) {
             out.swipe?.let { swipes += it }
             out.touch?.let { touches += it }
             out.action?.let { actions += it }
-            out.zoom?.let { zooms += it }
         }
 
         fun move(
             tx: Float, ty: Float, ms: Long, pose: BooleanArray,
-            pinch: Boolean = false, toSize: Float = size,
+            pinch: Boolean = false, toSize: Float = size, toTilt: Float = tilt,
         ) = apply {
             val steps = (ms / 33).coerceAtLeast(1)
-            val sx = x
-            val sy = y
-            val ss = size
+            val sx = x; val sy = y; val ss = size; val st = tilt
             for (i in 1..steps) {
                 t += 33
                 val k = i.toFloat() / steps
-                val hand = syntheticHand(sx + (tx - sx) * k, sy + (ty - sy) * k, pose, s = ss + (toSize - ss) * k, pinch = pinch)
+                val hand = syntheticHand(
+                    sx + (tx - sx) * k, sy + (ty - sy) * k, pose,
+                    s = ss + (toSize - ss) * k, pinch = pinch, tiltY = st + (toTilt - st) * k,
+                )
                 collect(engine.process(HandFrame(t, hand)))
             }
-            x = tx
-            y = ty
-            size = toSize
+            x = tx; y = ty; size = toSize; tilt = toTilt
         }
 
         fun hold(ms: Long, pose: BooleanArray, pinch: Boolean = false) = move(x, y, ms, pose, pinch)
-
+        fun resize(toSize: Float, ms: Long, pose: BooleanArray) = move(x, y, ms, pose, toSize = toSize)
         fun missing() = apply { t += 33; collect(engine.onHandMissing(t)) }
-
         fun lose() = apply { t += 33; collect(engine.onHandLost()) }
     }
 
     private fun kinds(list: List<TouchEvent>) = list.map { it::class.simpleName }
 
+    // ---------- Махи любой формой ----------
+
     @Test
-    fun cursorOff_fingerSwipes() {
-        val sim = Sim(cursor = false).apply { x = 0.2f }.hold(300, finger).move(0.8f, 0.5f, 250, finger).hold(300, finger)
-        assertEquals(listOf(AirGesture.SwipeRight), sim.swipes)
-        assertEquals(null, sim.engine.cursor)
+    fun swipe_worksWithAnyHandShape() {
+        for (pose in listOf(palm, finger, vSign, three, fist)) {
+            val sim = Sim().apply { x = 0.2f }.hold(300, pose).move(0.8f, 0.5f, 250, pose).hold(300, pose)
+            assertEquals("pose=${pose.toList()}", listOf(AirGesture.SwipeRight), sim.swipes)
+            assertEquals(emptyList<SystemAction>(), sim.actions)
+        }
     }
 
     @Test
-    fun cursorOn_palmStillSwipes() {
-        val sim = Sim(cursor = true).apply { x = 0.2f }.hold(300, palm).move(0.8f, 0.5f, 250, palm).hold(300, palm)
+    fun fastFlickOutOfFrame_counts() {
+        val sim = Sim().hold(300, palm).move(0.65f, 0.5f, 66, palm).missing()
         assertEquals(listOf(AirGesture.SwipeRight), sim.swipes)
+    }
+
+    @Test
+    fun droppingHandOutOfFrame_isNotSwipeDown() {
+        val sim = Sim().hold(300, palm).move(0.5f, 0.6f, 66, palm).missing().lose()
+        assertEquals(emptyList<AirGesture>(), sim.swipes)
+    }
+
+    // ---------- Тык ----------
+
+    @Test
+    fun quickPoke_goesHome() {
+        val sim = Sim().hold(400, palm).resize(0.20f, 165, palm).resize(0.15f, 200, palm).hold(300, palm)
+        assertEquals(listOf(SystemAction.HOME), sim.actions)
+        assertEquals(emptyList<AirGesture>(), sim.swipes)
+    }
+
+    @Test
+    fun poke_worksWithFistToo() {
+        val sim = Sim().hold(400, fist).resize(0.20f, 165, fist).resize(0.15f, 200, fist).hold(300, fist)
+        assertEquals(listOf(SystemAction.HOME), sim.actions)
+    }
+
+    @Test
+    fun pokeAndHold_opensRecents_notHome() {
+        val sim = Sim().hold(400, palm).resize(0.20f, 165, palm).hold(900, palm).resize(0.15f, 200, palm).hold(300, palm)
+        assertEquals(listOf(SystemAction.RECENTS), sim.actions)
+    }
+
+    @Test
+    fun slowlyBringingHandCloser_isNotPoke() {
+        val sim = Sim().hold(400, palm).resize(0.21f, 1500, palm).hold(800, palm)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+    }
+
+    @Test
+    fun tiltingWrist_isNotPoke() {
+        // Кисть наклонили и вернули: длина ладони менялась, ширина — нет.
+        val sim = Sim().hold(400, palm).move(0.5f, 0.5f, 165, palm, toTilt = 0.75f).move(0.5f, 0.5f, 165, palm, toTilt = 1f).hold(1000, palm)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+    }
+
+    @Test
+    fun handAppearingCloseToCamera_isNotPoke() {
+        val sim = Sim().apply { size = 0.22f }.hold(600, palm)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+    }
+
+    // ---------- «V» = назад ----------
+
+    @Test
+    fun vHeldStill_goesBack_once() {
+        val sim = Sim().hold(300, palm).hold(1200, vSign).hold(300, palm)
+        assertEquals(listOf(SystemAction.BACK), sim.actions)
+    }
+
+    @Test
+    fun vMoving_isSwipe_notBack() {
+        val sim = Sim().apply { x = 0.2f }.hold(300, vSign).move(0.8f, 0.5f, 250, vSign).hold(200, palm)
+        assertEquals(listOf(AirGesture.SwipeRight), sim.swipes)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+    }
+
+    @Test
+    fun quickV_doesNothing() {
+        val sim = Sim().hold(300, palm).hold(250, vSign).hold(300, palm)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+    }
+
+    @Test
+    fun vFlicker_doesNotBreakHold() {
+        val sim = Sim().hold(300, palm).hold(250, vSign).hold(33, palm).hold(300, vSign).hold(200, palm)
+        assertEquals(listOf(SystemAction.BACK), sim.actions)
+    }
+
+    // ---------- Курсор (отдельный режим) ----------
+
+    @Test
+    fun cursorOff_noCursorEver() {
+        val sim = Sim(cursor = false).hold(500, finger).hold(200, finger, pinch = true).hold(200, finger)
+        assertEquals(null, sim.engine.cursor)
         assertEquals(emptyList<TouchEvent>(), sim.touches)
     }
 
     @Test
-    fun cursorOn_fingerMovesCursorWithoutSwipingOrTouching() {
+    fun cursorOn_fingerMovesCursor_palmStillSwipes() {
         val sim = Sim(cursor = true).apply { x = 0.2f }.hold(300, finger).move(0.8f, 0.5f, 250, finger).hold(300, finger)
         assertEquals(emptyList<AirGesture>(), sim.swipes)
-        assertEquals(emptyList<TouchEvent>(), sim.touches)
-        val c = sim.engine.cursor!!
-        assert(c.x > 0.6f) { "cursor should follow finger to the right, was ${c.x}" }
+        assert(sim.engine.cursor!!.x > 0.6f)
+        val sim2 = Sim(cursor = true).apply { x = 0.2f }.hold(300, palm).move(0.8f, 0.5f, 250, palm).hold(300, palm)
+        assertEquals(listOf(AirGesture.SwipeRight), sim2.swipes)
     }
 
     @Test
@@ -95,15 +179,6 @@ class GestureEngineTest {
         assertEquals("Down", k.first())
         assertEquals("Up", k.last())
         assert(k.count { it == "Move" } >= 5) { "expected moves, got $k" }
-        assertEquals(emptyList<AirGesture>(), sim.swipes)
-    }
-
-    @Test
-    fun pinchHeldStill_becomesLongPress() {
-        val sim = Sim(cursor = true).hold(300, finger).hold(800, finger, pinch = true).hold(200, finger)
-        val k = kinds(sim.touches)
-        assertEquals("Down", k.first())
-        assertEquals("Up", k.last())
     }
 
     @Test
@@ -111,100 +186,6 @@ class GestureEngineTest {
         val sim = Sim(cursor = true).hold(300, finger).hold(100, finger, pinch = true)
             .move(0.5f, 0.3f, 300, finger, pinch = true).lose()
         assertEquals("Up", kinds(sim.touches).last())
-    }
-
-    @Test
-    fun fist_doesNothing() {
-        val sim = Sim(cursor = true).apply { x = 0.2f }.hold(300, fist).move(0.8f, 0.5f, 250, fist)
-        assertEquals(emptyList<AirGesture>(), sim.swipes)
-        assertEquals(emptyList<TouchEvent>(), sim.touches)
-        assertEquals(null, sim.engine.cursor)
-    }
-
-    // ---------- Системные жесты ----------
-
-    private val okSign = palm // + pinch = «нолик»: щипок и три пальца вверх
-    private val vSign = booleanArrayOf(true, true, false, false)
-
-    @Test
-    fun okHeld_goesHome_once() {
-        val sim = Sim(cursor = true).hold(300, palm).hold(1200, okSign, pinch = true).hold(300, palm)
-        assertEquals(listOf(SystemAction.HOME), sim.actions)
-        assertEquals(emptyList<AirGesture>(), sim.swipes)
-        assertEquals(emptyList<TouchEvent>(), sim.touches)
-        assertEquals(emptyList<ZoomEvent>(), sim.zooms)
-    }
-
-    @Test
-    fun okPulledBack_zoomsOut_withoutGoingHome() {
-        val sim = Sim(cursor = true).hold(300, palm)
-            .hold(100, okSign, pinch = true)
-            .move(0.5f, 0.5f, 400, okSign, pinch = true, toSize = 0.10f)
-            .hold(300, okSign, pinch = true)
-            .hold(200, palm)
-        assertEquals(ZoomEvent.Start, sim.zooms.first())
-        assertEquals(ZoomEvent.End, sim.zooms.last())
-        val last = sim.zooms.filterIsInstance<ZoomEvent.Update>().last().factor
-        assert(last < 0.8f) { "expected zoom out, factor=$last" }
-        assertEquals(emptyList<SystemAction>(), sim.actions)
-    }
-
-    @Test
-    fun okPushedForward_zoomsIn() {
-        val sim = Sim(cursor = true).hold(300, palm)
-            .hold(100, okSign, pinch = true)
-            .move(0.5f, 0.5f, 400, okSign, pinch = true, toSize = 0.21f)
-            .hold(200, palm)
-        val last = sim.zooms.filterIsInstance<ZoomEvent.Update>().last().factor
-        assert(last > 1.3f) { "expected zoom in, factor=$last" }
-    }
-
-    @Test
-    fun vHeld_goesBack_once() {
-        val sim = Sim(cursor = true).hold(300, palm).hold(1000, vSign).hold(300, palm)
-        assertEquals(listOf(SystemAction.BACK), sim.actions)
-    }
-
-    @Test
-    fun quickV_doesNothing() {
-        val sim = Sim(cursor = true).hold(300, palm).hold(250, vSign).hold(300, palm)
-        assertEquals(emptyList<SystemAction>(), sim.actions)
-    }
-
-    @Test
-    fun fistHeld_opensRecents() {
-        val sim = Sim(cursor = true).hold(300, palm).hold(1200, fist).hold(300, palm)
-        assertEquals(listOf(SystemAction.RECENTS), sim.actions)
-    }
-
-    @Test
-    fun posesFlicker_doesNotBreakHold() {
-        // «V» держим, но на один кадр классификатор увидел ладонь — удержание не сбрасывается.
-        val sim = Sim(cursor = true).hold(300, palm).hold(250, vSign).hold(33, palm).hold(250, vSign).hold(200, palm)
-        assertEquals(listOf(SystemAction.BACK), sim.actions)
-    }
-
-    // ---------- Быстрые махи ----------
-
-    @Test
-    fun fastFlickOutOfFrame_counts() {
-        // Резкий мах: камера успела увидеть 2 кадра, потом рука смазалась/вылетела.
-        val sim = Sim(cursor = true).hold(300, palm).move(0.65f, 0.5f, 66, palm).missing()
-        assertEquals(listOf(AirGesture.SwipeRight), sim.swipes)
-    }
-
-    @Test
-    fun droppingHandOutOfFrame_isNotSwipeDown() {
-        // Короткое резкое опускание и рука пропала: «вылет» засчитываем только по горизонтали.
-        val sim = Sim(cursor = true).hold(300, palm).move(0.5f, 0.6f, 66, palm).missing().lose()
-        assertEquals(emptyList<AirGesture>(), sim.swipes)
-    }
-
-    @Test
-    fun fastFlick_twoFramesOnly_stillCounts() {
-        // Очень быстрый, но широкий мах: всего 3 кадра.
-        val sim = Sim(cursor = true).apply { x = 0.3f }.hold(300, palm).move(0.7f, 0.5f, 100, palm).hold(300, palm)
-        assertEquals(listOf(AirGesture.SwipeRight), sim.swipes)
     }
 
     @Test

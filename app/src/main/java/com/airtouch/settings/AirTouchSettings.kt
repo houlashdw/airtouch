@@ -34,7 +34,7 @@ class AirTouchSettings(context: Context) {
         set(v) = prefs.edit { putBoolean(KEY_FRONT_CAMERA, v) }
 
     var cursorEnabled: Boolean
-        get() = prefs.getBoolean(KEY_CURSOR, true)
+        get() = prefs.getBoolean(KEY_CURSOR, false)
         set(v) = prefs.edit { putBoolean(KEY_CURSOR, v) }
 
     var invertSwipes: Boolean

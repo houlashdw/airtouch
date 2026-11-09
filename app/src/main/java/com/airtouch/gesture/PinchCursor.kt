@@ -47,8 +47,11 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
 
     private enum class Touch { NONE, PENDING, DRAGGING }
 
-    private val fx = OneEuroFilter()
-    private val fy = OneEuroFilter()
+    // Сглаживание сильнее, чем у махов: курсору важна точность, а не мгновенность.
+    private val fx = OneEuroFilter(minCutoff = 0.8f, beta = 3f)
+    private val fy = OneEuroFilter(minCutoff = 0.8f, beta = 3f)
+    /** Позиции курсора за последние ~300 мс — чтобы нажать туда, где курсор был ДО щипка. */
+    private val trail = ArrayDeque<Triple<Long, Float, Float>>()
     private var pinched = false
     private var flipFrames = 0
     private var touch = Touch.NONE
@@ -70,6 +73,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         flipFrames = 0
         fx.reset()
         fy.reset()
+        trail.clear()
         cursor = null
         return up
     }
@@ -89,22 +93,28 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
             flipFrames = 0
         }
 
+        // Якорь — между костяшкой и средним суставом указательного: при щипке сгибается кончик,
+        // а эта точка почти не сдвигается, поэтому курсор не «прыгает» в момент нажатия.
         val lm = frame.landmarks
-        val mx = (lm[Lm.THUMB_TIP].x + lm[Lm.INDEX_TIP].x) / 2f
-        val my = (lm[Lm.THUMB_TIP].y + lm[Lm.INDEX_TIP].y) / 2f
+        val mx = (lm[Lm.INDEX_MCP].x + lm[Lm.INDEX_PIP].x) / 2f
+        val my = (lm[Lm.INDEX_MCP].y + lm[Lm.INDEX_PIP].y) / 2f
         val sx = ((mx - cfg.regionLeft) / (cfg.regionRight - cfg.regionLeft)).coerceIn(0f, 1f)
         val sy = ((my - cfg.regionTop) / (cfg.regionBottom - cfg.regionTop)).coerceIn(0f, 1f)
         val x = fx.filter(sx, t)
         val y = fy.filter(sy, t)
         cursor = Cursor(x, y, pinched)
+        trail.addLast(Triple(t, x, y))
+        while (trail.isNotEmpty() && t - trail.first().first > 300) trail.removeFirst()
 
         return when (touch) {
             Touch.NONE -> {
                 if (pinched) {
                     touch = Touch.PENDING
                     downAt = t
-                    downX = x
-                    downY = y
+                    // Сведение пальцев слегка тянет руку — берём точку ~120 мс назад.
+                    val before = trail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: trail.first()
+                    downX = before.second
+                    downY = before.third
                 }
                 null
             }
@@ -129,6 +139,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     }
 
     companion object {
+        private const val PINCH_LOOKBACK_MS = 120L
+
         /** Расстояние между кончиками большого и указательного относительно длины ладони. */
         fun pinchRatio(frame: HandFrame): Float =
             frame.dist(Lm.THUMB_TIP, Lm.INDEX_TIP) / frame.dist(Lm.WRIST, Lm.MIDDLE_MCP).coerceAtLeast(1e-4f)

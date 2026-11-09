@@ -234,10 +234,6 @@ private class TrackerView(context: Context) : View(context) {
             return
         }
 
-        if (s.zooming) {
-            canvas.drawText("🔍 масштаб", px, py, labelText)
-            return
-        }
 
         if (s.cursorVisible) {
             val cx = s.cursorX * width

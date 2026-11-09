@@ -320,6 +320,7 @@ class GestureCameraService : LifecycleService() {
         }
         val now = SystemClock.uptimeMillis()
         if (frame == null) {
+            countFrame(now)
             if (!handVisible) return
             // Первый кадр без руки: возможно, это резкий мах «за край» — засчитываем сразу.
             if (!missingHandled) {
@@ -334,12 +335,13 @@ class GestureCameraService : LifecycleService() {
                 dispatch(engine.onHandLost(), input)
                 AirTouchState.update {
                     it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false,
-                        holdAction = null, zooming = false)
+                        holdAction = null)
                 }
             }
             return
         }
 
+        countFrame(now)
         lastHandSeenAt = now
         handVisible = true
         missingHandled = false
@@ -363,7 +365,8 @@ class GestureCameraService : LifecycleService() {
                 pinching = cursor?.pinching == true,
                 holdAction = out.hold?.action,
                 holdProgress = out.hold?.progress ?: 0f,
-                zooming = engine.isZooming,
+                fps = fps,
+                latencyMs = (now - frame.timestampMs).toInt(),
                 lastGesture = out.swipe ?: s.lastGesture,
                 lastGestureAt = if (out.swipe != null) now else s.lastGestureAt,
                 lastAction = out.action ?: s.lastAction,
@@ -372,10 +375,24 @@ class GestureCameraService : LifecycleService() {
         }
     }
 
+    // FPS — сколько кадров в секунду реально проходит через распознавание.
+    private var fpsWindowStart = 0L
+    private var fpsFrames = 0
+    @Volatile private var fps = 0
+
+    private fun countFrame(now: Long) {
+        fpsFrames++
+        if (now - fpsWindowStart >= 1000) {
+            fps = (fpsFrames * 1000 / (now - fpsWindowStart).coerceAtLeast(1)).toInt()
+            fpsFrames = 0
+            fpsWindowStart = now
+            if (!handVisible) AirTouchState.update { it.copy(fps = fps) }
+        }
+    }
+
     private fun dispatch(out: EngineOutput, input: AirInputService?) {
         if (input == null) return
         out.touch?.let { input.touch(it) }
-        out.zoom?.let { input.zoom(it) }
         out.swipe?.let { input.perform(if (invertSwipes) it.inverted() else it) }
         out.action?.let { input.system(it) }
     }

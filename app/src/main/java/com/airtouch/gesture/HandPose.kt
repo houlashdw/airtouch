@@ -24,7 +24,18 @@ object HandPoseClassifier {
         frame.dist(Lm.WRIST, tip) > frame.dist(Lm.WRIST, pip) * EXTENDED_RATIO
     }
 
+    /** Обученной модели доверяем больше, чем правилам; если она не уверена — правила. */
+    private const val MODEL_MIN_SCORE = 0.55f
+
     fun classify(frame: HandFrame): HandPose {
+        if (frame.labelScore >= MODEL_MIN_SCORE) {
+            when (frame.label) {
+                "Open_Palm" -> return HandPose.OPEN_PALM
+                "Closed_Fist" -> return HandPose.FIST
+                "Pointing_Up" -> return HandPose.POINTING
+                "Victory" -> return HandPose.V_SIGN
+            }
+        }
         val e = extendedFingers(frame)
         val count = e.count { it }
         return when {

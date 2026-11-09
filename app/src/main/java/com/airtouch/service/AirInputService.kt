@@ -14,7 +14,6 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.SystemAction
-import com.airtouch.gesture.ZoomEvent
 import com.airtouch.gesture.TouchEvent
 import com.airtouch.overlay.OverlayController
 
@@ -24,7 +23,6 @@ import com.airtouch.overlay.OverlayController
  * - свайпы — через dispatchGesture (работают в любом приложении, как настоящий палец);
  * - курсор: тап, долгое нажатие и перетаскивание — «продолжаемыми» штрихами
  *   (StrokeDescription.willContinue), то есть виртуальный палец лежит на экране, пока сжат щипок;
- * - масштаб — два «продолжаемых» пальца, которые сходятся/расходятся;
  * - домой / назад / недавние — performGlobalAction.
  * - плавающая кнопка и точка-трекер — окна TYPE_ACCESSIBILITY_OVERLAY, им не нужно
  *   разрешение «Поверх других приложений».
@@ -34,9 +32,6 @@ class AirInputService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var overlay: OverlayController? = null
     private var drag: TouchSession? = null
-    private var zoomSession: TouchSession? = null
-    private var zoomCenter = PointF()
-    private var zoomBaseHalf = 0f
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -61,8 +56,7 @@ class AirInputService : AccessibilityService() {
     private fun teardown() {
         drag?.end(null)
         drag = null
-        zoomSession?.end(null)
-        zoomSession = null
+
         overlay?.hide()
         overlay = null
         if (instance === this) instance = null
@@ -108,8 +102,6 @@ class AirInputService : AccessibilityService() {
         main.post {
             drag?.end(null)
             drag = null
-            zoomSession?.end(null)
-            zoomSession = null
         }
     }
 
@@ -124,46 +116,6 @@ class AirInputService : AccessibilityService() {
                 },
             )
         }
-    }
-
-    /**
-     * Масштаб двумя виртуальными пальцами вокруг центра экрана:
-     * factor > 1 — пальцы расходятся (увеличить), < 1 — сходятся (уменьшить).
-     */
-    fun zoom(event: ZoomEvent) {
-        main.post {
-            when (event) {
-                ZoomEvent.Start -> {
-                    zoomSession?.end(null)
-                    val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
-                    zoomCenter = PointF(b.width() / 2f, b.height() / 2f)
-                    zoomBaseHalf = minOf(b.width(), b.height()) * 0.15f
-                    zoomSession = TouchSession(zoomPoints(1f)).also { it.begin() }
-                }
-                is ZoomEvent.Update -> zoomSession?.moveTo(zoomPoints(event.factor))
-                ZoomEvent.End -> {
-                    zoomSession?.end(null)
-                    zoomSession = null
-                }
-            }
-        }
-    }
-
-    private fun zoomPoints(factor: Float): List<PointF> {
-        val maxHalf = minOf(zoomCenter.x, zoomCenter.y) * 0.9f
-        val half = (zoomBaseHalf * factor).coerceIn(20f, maxHalf)
-        return listOf(
-            PointF(zoomCenter.x - half, zoomCenter.y),
-            PointF(zoomCenter.x + half, zoomCenter.y),
-        )
-    }
-
-    private fun toScreen(x: Float, y: Float): PointF {
-        val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
-        return PointF(
-            (x * b.width()).coerceIn(1f, b.width() - 2f),
-            (y * b.height()).coerceIn(1f, b.height() - 2f),
-        )
     }
 
     /** Координаты — доли экрана. Не начинаем у самого края, чтобы не задеть системный жест «назад». */

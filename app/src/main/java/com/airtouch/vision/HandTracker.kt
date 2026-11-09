@@ -10,13 +10,14 @@ import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
 import com.google.mediapipe.tasks.core.Delegate
 import com.google.mediapipe.tasks.vision.core.RunningMode
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarker
-import com.google.mediapipe.tasks.vision.handlandmarker.HandLandmarkerResult
+import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizer
+import com.google.mediapipe.tasks.vision.gesturerecognizer.GestureRecognizerResult
 import java.io.Closeable
 
 /**
- * Обёртка над MediaPipe Hand Landmarker в режиме LIVE_STREAM.
- * Всё считается на устройстве; сначала пробуем GPU, при неудаче — CPU.
+ * MediaPipe Gesture Recognizer в режиме LIVE_STREAM: 21 точка руки + обученный классификатор
+ * поз (Open_Palm, Closed_Fist, Pointing_Up, Victory, Thumb_Up…). Модель обучена на тысячах рук и
+ * различает позы надёжнее самодельных правил. Всё считается на устройстве; GPU → CPU fallback.
  *
  * [onResult] вызывается на внутреннем потоке MediaPipe: null — руки в кадре нет.
  */
@@ -26,51 +27,66 @@ class HandTracker(
     private val onError: (Throwable) -> Unit,
 ) : Closeable {
 
-    private val landmarker: HandLandmarker = try {
+    /** Какой делегат реально работает — показываем в приложении для диагностики. */
+    var usingGpu: Boolean = true
+        private set
+
+    private val recognizer: GestureRecognizer = try {
         build(context, Delegate.GPU)
     } catch (e: Exception) {
         Log.w(TAG, "GPU delegate unavailable, falling back to CPU", e)
+        usingGpu = false
         build(context, Delegate.CPU)
     }
 
-    private fun build(context: Context, delegate: Delegate): HandLandmarker {
+    private fun build(context: Context, delegate: Delegate): GestureRecognizer {
         val base = BaseOptions.builder()
             .setModelAssetPath(MODEL_ASSET)
             .setDelegate(delegate)
             .build()
-        val options = HandLandmarker.HandLandmarkerOptions.builder()
+        val options = GestureRecognizer.GestureRecognizerOptions.builder()
             .setBaseOptions(base)
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setNumHands(1)
             .setMinHandDetectionConfidence(0.4f)
             .setMinHandPresenceConfidence(0.4f)
             .setMinTrackingConfidence(0.4f)
-            .setResultListener { result: HandLandmarkerResult, image: MPImage -> handle(result, image) }
+            .setResultListener { result: GestureRecognizerResult, image: MPImage -> handle(result, image) }
             .setErrorListener { e -> onError(e) }
             .build()
-        return HandLandmarker.createFromOptions(context, options)
+        return GestureRecognizer.createFromOptions(context, options)
     }
 
     /** timestampMs должен строго возрастать — это требование LIVE_STREAM. */
     fun detect(bitmap: Bitmap, timestampMs: Long) {
-        landmarker.detectAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
+        recognizer.recognizeAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
     }
 
-    private fun handle(result: HandLandmarkerResult, image: MPImage) {
+    private fun handle(result: GestureRecognizerResult, image: MPImage) {
         val hands = result.landmarks()
         if (hands.isEmpty()) {
             onResult(null)
             return
         }
         val points = hands[0].map { Landmark(it.x(), it.y(), it.z()) }
-        onResult(HandFrame(result.timestampMs(), points, image.width, image.height))
+        val top = result.gestures().firstOrNull()?.firstOrNull()
+        onResult(
+            HandFrame(
+                timestampMs = result.timestampMs(),
+                landmarks = points,
+                imageWidth = image.width,
+                imageHeight = image.height,
+                label = top?.categoryName(),
+                labelScore = top?.score() ?: 0f,
+            ),
+        )
     }
 
-    override fun close() = landmarker.close()
+    override fun close() = recognizer.close()
 
     private companion object {
         const val TAG = "AirTouch/HandTracker"
         /** Скачивается Gradle-задачей downloadHandModel при первой сборке. */
-        const val MODEL_ASSET = "hand_landmarker.task"
+        const val MODEL_ASSET = "gesture_recognizer.task"
     }
 }

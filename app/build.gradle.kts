@@ -46,13 +46,13 @@ kotlin {
     }
 }
 
-// ---- Модель MediaPipe Hand Landmarker (~7.8 МБ) скачивается один раз при первой сборке ----
+// ---- Модель MediaPipe Gesture Recognizer (рука + обученный классификатор жестов, ~8 МБ) ----
 val handModelUrl =
-    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
-val handModelFile = layout.projectDirectory.file("src/main/assets/hand_landmarker.task")
+    "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task"
+val handModelFile = layout.projectDirectory.file("src/main/assets/gesture_recognizer.task")
 
 val downloadHandModel by tasks.registering {
-    description = "Downloads MediaPipe hand_landmarker.task into assets"
+    description = "Downloads MediaPipe gesture_recognizer.task into assets"
     outputs.file(handModelFile)
     onlyIf { !handModelFile.asFile.exists() }
     doLast {
@@ -61,7 +61,7 @@ val downloadHandModel by tasks.registering {
         URI(handModelUrl).toURL().openStream().use { input ->
             target.outputStream().use { output -> input.copyTo(output) }
         }
-        logger.lifecycle("Downloaded hand_landmarker.task (${target.length() / 1024} KB)")
+        logger.lifecycle("Downloaded gesture_recognizer.task (${target.length() / 1024} KB)")
     }
 }
 tasks.named("preBuild") { dependsOn(downloadHandModel) }
