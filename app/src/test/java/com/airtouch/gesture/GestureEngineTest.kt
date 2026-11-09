@@ -223,6 +223,24 @@ class GestureEngineTest {
     }
 
     @Test
+    fun pinchMode_pauseBeforeMoving_isStillScroll_notLongPress() {
+        // Ошибка из жизни: щипок, пауза ~0.45 с, потом повёл. Палец не должен лечь до начала движения.
+        val sim = pinchSim().hold(300, finger).hold(450, finger, pinch = true)
+        assertEquals(emptyList<TouchEvent>(), sim.touches) // пока стоим — ничего не отправлено
+        sim.move(0.5f, 0.2f, 250, finger, pinch = true).hold(200, finger)
+        val k = kinds(sim.touches)
+        assertEquals("Down", k.first())
+        assert(k.count { it == "Move" } >= 3) { "$k" }
+        assertEquals("Up", k.last())
+    }
+
+    @Test
+    fun pinchMode_slowTapStillTaps() {
+        val sim = pinchSim().hold(300, finger).hold(450, finger, pinch = true).hold(200, finger)
+        assertEquals(listOf("Tap"), kinds(sim.touches))
+    }
+
+    @Test
     fun pinchMode_lowerHandToBottom_showsDock_andTapRunsAction() {
         // Опустили руку в самый низ (курсор упирается в край), подождали — панель выехала.
         val sim = pinchSim().apply { x = 0.2f; y = 0.5f }.hold(200, finger).move(0.2f, 0.95f, 300, finger)

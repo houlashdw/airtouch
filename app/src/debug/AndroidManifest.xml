@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Только в debug-сборке: тестовый экран для сквозных тестов на эмуляторе. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity
+            android:name=".debug.TestScreenActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AirTouch"
+            android:windowSoftInputMode="adjustNothing|stateHidden" />
+    </application>
+</manifest>

@@ -17,6 +17,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0-mvp"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -89,4 +90,9 @@ dependencies {
     implementation("com.google.mediapipe:tasks-vision:0.10.26")
 
     testImplementation("junit:junit:4.13.2")
+
+    // Сквозные тесты на эмуляторе: синтетическая рука → движок → служба → настоящие View.
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
 }
