@@ -2,6 +2,7 @@ package com.airtouch.core
 
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.HandPose
+import com.airtouch.gesture.SystemAction
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,6 +38,12 @@ object AirTouchState {
         val cursorX: Float = 0.5f,
         val cursorY: Float = 0.5f,
         val pinching: Boolean = false,
+        /** Идёт удержание позы (кольцо на экране). */
+        val holdAction: SystemAction? = null,
+        val holdProgress: Float = 0f,
+        val zooming: Boolean = false,
+        val lastAction: SystemAction? = null,
+        val lastActionAt: Long = 0L,
         val lastGesture: AirGesture? = null,
         val lastGestureAt: Long = 0L,
         val error: String? = null,

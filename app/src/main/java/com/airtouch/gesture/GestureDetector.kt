@@ -11,6 +11,14 @@ sealed interface AirGesture {
     data object SwipeDown : AirGesture
 }
 
+/** Для настройки «обратное направление». */
+fun AirGesture.inverted(): AirGesture = when (this) {
+    AirGesture.SwipeLeft -> AirGesture.SwipeRight
+    AirGesture.SwipeRight -> AirGesture.SwipeLeft
+    AirGesture.SwipeUp -> AirGesture.SwipeDown
+    AirGesture.SwipeDown -> AirGesture.SwipeUp
+}
+
 /** Где в кадре рука вообще считается «активной». */
 enum class ActivationZone {
     FULL,
@@ -43,16 +51,17 @@ data class SwipeConfig(
     /** Другие направления после свайпа заблокированы столько — это гасит обратный ход руки… */
     val otherDirectionBlockMs: Long = 700,
     /** …или пока рука не замрёт на столько. */
-    val rearmStillMs: Long = 120,
+    val rearmStillMs: Long = 100,
     /** Скорость, ниже которой рука считается неподвижной. */
     val stillVelocity: Float = 0.45f,
     /**
      * Рука только появилась — свайпы не ловим, пока она не замрёт на [rearmStillMs]
      * или не пройдёт столько времени. Иначе подъём руки в кадр = ложный «свайп вверх».
      */
-    val armMs: Long = 300,
-    /** Сглаживание EMA, 0..1 (1 = без сглаживания). */
-    val smoothing: Float = 0.6f,
+    val armMs: Long = 200,
+    /** Адаптивное сглаживание (One Euro): в покое гасит дрожание, при резком махе почти не отстаёт. */
+    val filterMinCutoff: Float = 2f,
+    val filterBeta: Float = 6f,
     val enableVertical: Boolean = true,
     /** true — махать можно и пальцем; false — только ладонью (палец занят курсором). */
     val fingerSwipes: Boolean = true,
@@ -80,10 +89,17 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
     private data class Sample(val t: Long, val x: Float, val y: Float)
 
     private val history = ArrayDeque<Sample>()
+    /** Последняя несглаженная позиция: при «вылете» руки фильтр не успевает её догнать. */
+    private var lastRaw: Sample? = null
     private var smoothed: Sample? = null
     private var stillSince: Long? = null
     private var validSince: Long? = null
     private var armed = false
+    /** Рука замирала с момента появления — только тогда разрешаем вертикаль (подъём руки ≠ свайп вверх). */
+    private var restedSinceValid = false
+    private var fx = OneEuroFilter()
+    private var fy = OneEuroFilter()
+    private var filterParams = 0f to 0f
     private var lastSwipe: AirGesture? = null
     private var lastSwipeAt = 0L
 
@@ -94,13 +110,50 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
     var lastPose: HandPose = HandPose.OTHER
         private set
 
+    /** Другая поза (курсор, «нолик» и т.п.): свайпы не ловим, после возврата ладони — снова «взвод». */
+    fun disarm() {
+        history.clear()
+        smoothed = null
+        fx.reset()
+        fy.reset()
+        validSince = null
+        armed = false
+        restedSinceValid = false
+    }
+
+    /**
+     * Камера только что потеряла руку. Если перед этим был быстрый горизонтальный мах —
+     * засчитываем его: при резком взмахе рука смазывается или вылетает из кадра раньше,
+     * чем набирается полная дистанция. Вертикаль не берём: опускание руки ≠ «свайп вниз».
+     */
+    fun checkExitFlick(t: Long): AirGesture? {
+        val cfg = config
+        if (!armed || history.size < 2) return null
+        val end = lastRaw?.takeIf { it.t == history.last().t } ?: history.last()
+        if (t - end.t > EXIT_MAX_GAP_MS) return null
+        for (start in history) {
+            val c = classifySegment(start, end, cfg, distanceFactor = 0.6f, velocityFactor = 1.5f, vertical = false)
+                ?: continue
+            if (isAllowed(c, end.t, cfg)) {
+                lastSwipe = c
+                lastSwipeAt = end.t
+                history.clear()
+                return c
+            }
+        }
+        return null
+    }
+
     /** Рука пропала из кадра: всё сбрасываем, включая блокировки направлений. */
     fun onHandLost() {
         history.clear()
         smoothed = null
+        fx.reset()
+        fy.reset()
         stillSince = null
         validSince = null
         armed = false
+        restedSinceValid = false
         lastSwipe = null
         lastPalm = null
     }
@@ -115,14 +168,15 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         val raw = frame.palmCenter
         val rx = raw.x * frame.xScale
         val ry = raw.y * frame.yScale
+        lastRaw = Sample(t, rx, ry)
 
-        val prev = smoothed
-        var cur = if (prev == null) {
-            Sample(t, rx, ry)
-        } else {
-            val a = cfg.smoothing.coerceIn(0.05f, 1f)
-            Sample(t, prev.x + a * (rx - prev.x), prev.y + a * (ry - prev.y))
+        if (filterParams != cfg.filterMinCutoff to cfg.filterBeta) {
+            filterParams = cfg.filterMinCutoff to cfg.filterBeta
+            fx = OneEuroFilter(cfg.filterMinCutoff, cfg.filterBeta)
+            fy = OneEuroFilter(cfg.filterMinCutoff, cfg.filterBeta)
         }
+        val prev = smoothed
+        var cur = Sample(t, fx.filter(rx, t), fy.filter(ry, t))
         if (prev != null && hypot(cur.x - prev.x, cur.y - prev.y) < cfg.deadZone) {
             cur = Sample(t, prev.x, prev.y)
         }
@@ -143,7 +197,12 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
             history.clear()
             validSince = null
             armed = false
+            restedSinceValid = false
             return null
+        }
+        if (!restedSinceValid && stillSince?.let { t - it >= cfg.rearmStillMs } == true) {
+            restedSinceValid = true
+            history.clear() // движение до паузы (подъём руки) — не жест
         }
 
         if (!armed) {
@@ -163,7 +222,8 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         var blocked = false
         var gesture: AirGesture? = null
         for (start in history) {
-            val candidate = classifySegment(start, cur, cfg) ?: continue
+            val candidate = classifySegment(start, cur, cfg, vertical = cfg.enableVertical && restedSinceValid)
+                ?: continue
             if (isAllowed(candidate, t, cfg)) {
                 gesture = candidate
                 break
@@ -195,20 +255,27 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         return dt >= cfg.otherDirectionBlockMs || restedSinceSwipe
     }
 
-    private fun classifySegment(start: Sample, end: Sample, cfg: SwipeConfig): AirGesture? {
+    private fun classifySegment(
+        start: Sample,
+        end: Sample,
+        cfg: SwipeConfig,
+        distanceFactor: Float = 1f,
+        velocityFactor: Float = 1f,
+        vertical: Boolean = cfg.enableVertical,
+    ): AirGesture? {
         val dtMs = end.t - start.t
         if (dtMs < MIN_SWIPE_DURATION_MS) return null
         val dtSec = dtMs / 1000f
         val dx = end.x - start.x
         val dy = end.y - start.y
-        val required = cfg.requiredDistance
+        val required = cfg.requiredDistance * distanceFactor
+        val minV = cfg.minVelocity * velocityFactor
         return when {
-            abs(dx) >= required && abs(dx) >= cfg.axisDominance * abs(dy) &&
-                abs(dx) / dtSec >= cfg.minVelocity ->
+            abs(dx) >= required && abs(dx) >= cfg.axisDominance * abs(dy) && abs(dx) / dtSec >= minV ->
                 if (dx < 0) AirGesture.SwipeLeft else AirGesture.SwipeRight
 
-            cfg.enableVertical && abs(dy) >= required * cfg.verticalDistanceFactor &&
-                abs(dy) >= cfg.axisDominance * abs(dx) && abs(dy) / dtSec >= cfg.minVelocity ->
+            vertical && abs(dy) >= required * cfg.verticalDistanceFactor &&
+                abs(dy) >= cfg.axisDominance * abs(dx) && abs(dy) / dtSec >= minV ->
                 if (dy < 0) AirGesture.SwipeUp else AirGesture.SwipeDown
 
             else -> null
@@ -218,5 +285,7 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
     private companion object {
         /** Меньше ~2 кадров при 30 FPS — это скачок трекинга, а не мах. */
         const val MIN_SWIPE_DURATION_MS = 60L
+        /** Рука пропала позже этого после последнего кадра — это уже не «вылет» маха. */
+        const val EXIT_MAX_GAP_MS = 150L
     }
 }

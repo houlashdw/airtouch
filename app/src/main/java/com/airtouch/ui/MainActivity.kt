@@ -52,6 +52,7 @@ import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.HandPose
+import com.airtouch.gesture.SystemAction
 import com.airtouch.service.AirInputService
 import com.airtouch.service.GestureCameraService
 import com.airtouch.settings.AirTouchSettings
@@ -157,14 +158,29 @@ private fun AirTouchScreen() {
 
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Как махать", style = MaterialTheme.typography.titleMedium)
+                    Text("Жесты", style = MaterialTheme.typography.titleMedium)
+                    Text("✋ Ладонь, быстрый мах — листать ←→↑↓")
+                    Text("☝️ Указательный палец — курсор")
+                    Text("🤏 Щипок (большой + указательный, остальные согнуты) — нажать")
+                    Text("🤏 Щипок и вести — прокрутка / перетаскивание")
+                    Text("🤏 Щипок и держать — долгое нажатие")
+                    Text("👌 «Нолик» (щипок, три пальца вверх) держать — домой")
+                    Text("👌 «Нолик» и отвести руку к себе — уменьшить, к телефону — увеличить")
+                    Text("✌️ «V» держать — назад")
+                    Text("✊ Кулак держать 1 с — недавние приложения")
+                    Text("Удержание показывает кольцо — передумали, смените позу, пока кольцо не замкнулось.",
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            ElevatedCard {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Советы", style = MaterialTheme.typography.titleMedium)
                     Text("• Рука целиком в кадре фронталки: 20–40 см от телефона, не вплотную.")
-                    Text("• Сначала покажите руку, затем короткий быстрый мах. Подъём руки в кадр не считается.")
-                    Text("• Листать подряд можно без пауз: возврат руки назад игнорируется.")
-                    Text("• Хотите листнуть в обратную сторону — задержите руку на миг.")
-                    Text("• Проверьте прямо здесь: строки «Вижу» и «Последний жест» выше.")
-                    Text("• Кулак и медленные движения игнорируются.")
-                    Text("• Если не видит руку — включите свет: в темноте точность падает.")
+                    Text("• Покажите руку, затем мах. Подъём руки в кадр не считается.")
+                    Text("• Листать подряд можно без пауз; в обратную сторону — задержите руку на миг.")
+                    Text("• Резкий мах «за край кадра» тоже засчитывается.")
+                    Text("• В темноте точность падает — включите свет.")
                 }
             }
         }
@@ -224,13 +240,17 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
             }
             if (status.mode == Mode.ACTIVE) {
                 val seen = when {
+                    status.holdAction == SystemAction.HOME -> "нолик 👌 — держите: домой"
+                    status.holdAction == SystemAction.BACK -> "V ✌️ — держите: назад"
+                    status.holdAction == SystemAction.RECENTS -> "кулак ✊ — держите: недавние"
+                    status.zooming -> "нолик 👌 — масштаб"
                     status.cursorVisible && status.pinching -> "щипок 🤏 — нажатие"
                     status.cursorVisible -> "палец ☝️ — курсор"
                     else -> when (status.pose) {
                         HandPose.OPEN_PALM -> "ладонь ✋ — можно махать"
                         HandPose.POINTING -> "палец ☝️ — можно махать"
                         HandPose.V_SIGN, HandPose.OTHER -> "руку — можно махать"
-                        HandPose.FIST -> "кулак ✊ — ничего не делает"
+                        HandPose.FIST -> "кулак ✊"
                         null -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
                     }
                 }
@@ -267,6 +287,7 @@ private fun SettingsCard(settings: AirTouchSettings) {
     var vertical by remember { mutableStateOf(settings.verticalSwipes) }
     var front by remember { mutableStateOf(settings.useFrontCamera) }
     var cursor by remember { mutableStateOf(settings.cursorEnabled) }
+    var invert by remember { mutableStateOf(settings.invertSwipes) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -278,6 +299,12 @@ private fun SettingsCard(settings: AirTouchSettings) {
                     "щипок и вести — прокрутка, щипок и держать — долгое нажатие. Ладонь — махи.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
+
+            SwitchRow(
+                title = "Обратное направление махов",
+                subtitle = "Если кажется, что листает «не туда»",
+                checked = invert,
+            ) { invert = it; settings.invertSwipes = it }
 
             Text("Чувствительность: ×${"%.1f".format(sensitivity)}")
             Slider(

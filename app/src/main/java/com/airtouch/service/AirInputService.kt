@@ -13,6 +13,8 @@ import android.provider.Settings
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.SystemAction
+import com.airtouch.gesture.ZoomEvent
 import com.airtouch.gesture.TouchEvent
 import com.airtouch.overlay.OverlayController
 
@@ -22,7 +24,8 @@ import com.airtouch.overlay.OverlayController
  * - свайпы — через dispatchGesture (работают в любом приложении, как настоящий палец);
  * - курсор: тап, долгое нажатие и перетаскивание — «продолжаемыми» штрихами
  *   (StrokeDescription.willContinue), то есть виртуальный палец лежит на экране, пока сжат щипок;
- * - «назад» — performGlobalAction(GLOBAL_ACTION_BACK) (задел под жест «V»);
+ * - масштаб — два «продолжаемых» пальца, которые сходятся/расходятся;
+ * - домой / назад / недавние — performGlobalAction.
  * - плавающая кнопка и точка-трекер — окна TYPE_ACCESSIBILITY_OVERLAY, им не нужно
  *   разрешение «Поверх других приложений».
  */
@@ -30,7 +33,10 @@ class AirInputService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private var overlay: OverlayController? = null
-    private var drag: DragSession? = null
+    private var drag: TouchSession? = null
+    private var zoomSession: TouchSession? = null
+    private var zoomCenter = PointF()
+    private var zoomBaseHalf = 0f
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -55,6 +61,8 @@ class AirInputService : AccessibilityService() {
     private fun teardown() {
         drag?.end(null)
         drag = null
+        zoomSession?.end(null)
+        zoomSession = null
         overlay?.hide()
         overlay = null
         if (instance === this) instance = null
@@ -84,23 +92,70 @@ class AirInputService : AccessibilityService() {
                 is TouchEvent.Tap -> tap(p)
                 is TouchEvent.Down -> {
                     drag?.end(null)
-                    drag = DragSession(p).also { it.begin() }
+                    drag = TouchSession(listOf(p)).also { it.begin() }
                 }
-                is TouchEvent.Move -> drag?.moveTo(p)
+                is TouchEvent.Move -> drag?.moveTo(listOf(p))
                 is TouchEvent.Up -> {
-                    drag?.end(p)
+                    drag?.end(listOf(p))
                     drag = null
                 }
             }
         }
     }
 
-    /** Отпустить виртуальный палец (рука пропала, экран погас, режим выключен). */
+    /** Отпустить виртуальные пальцы (рука пропала, экран погас, режим выключен). */
     fun cancelTouch() {
         main.post {
             drag?.end(null)
             drag = null
+            zoomSession?.end(null)
+            zoomSession = null
         }
+    }
+
+    /** Домой / назад / недавние. Можно вызывать с любого потока. */
+    fun system(action: SystemAction) {
+        main.post {
+            performGlobalAction(
+                when (action) {
+                    SystemAction.HOME -> GLOBAL_ACTION_HOME
+                    SystemAction.BACK -> GLOBAL_ACTION_BACK
+                    SystemAction.RECENTS -> GLOBAL_ACTION_RECENTS
+                },
+            )
+        }
+    }
+
+    /**
+     * Масштаб двумя виртуальными пальцами вокруг центра экрана:
+     * factor > 1 — пальцы расходятся (увеличить), < 1 — сходятся (уменьшить).
+     */
+    fun zoom(event: ZoomEvent) {
+        main.post {
+            when (event) {
+                ZoomEvent.Start -> {
+                    zoomSession?.end(null)
+                    val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+                    zoomCenter = PointF(b.width() / 2f, b.height() / 2f)
+                    zoomBaseHalf = minOf(b.width(), b.height()) * 0.15f
+                    zoomSession = TouchSession(zoomPoints(1f)).also { it.begin() }
+                }
+                is ZoomEvent.Update -> zoomSession?.moveTo(zoomPoints(event.factor))
+                ZoomEvent.End -> {
+                    zoomSession?.end(null)
+                    zoomSession = null
+                }
+            }
+        }
+    }
+
+    private fun zoomPoints(factor: Float): List<PointF> {
+        val maxHalf = minOf(zoomCenter.x, zoomCenter.y) * 0.9f
+        val half = (zoomBaseHalf * factor).coerceIn(20f, maxHalf)
+        return listOf(
+            PointF(zoomCenter.x - half, zoomCenter.y),
+            PointF(zoomCenter.x + half, zoomCenter.y),
+        )
     }
 
     private fun toScreen(x: Float, y: Float): PointF {
@@ -122,54 +177,56 @@ class AirInputService : AccessibilityService() {
     }
 
     /**
-     * «Палец на экране» на время щипка: цепочка коротких штрихов, каждый продолжает предыдущий.
-     * Следующий кусок отправляется, когда система закончила предыдущий (onCompleted),
-     * поэтому палец не отрывается, пока сессия не завершена.
+     * Виртуальные пальцы на экране (1 — перетаскивание, 2 — масштаб): цепочка коротких штрихов,
+     * каждый продолжает предыдущий (willContinue). Следующий кусок отправляется, когда система
+     * закончила предыдущий (onCompleted), поэтому пальцы не отрываются, пока сессия не завершена.
      */
-    private inner class DragSession(start: PointF) {
+    private inner class TouchSession(start: List<PointF>) {
         private var last = start
         private var target = start
         private var ending = false
         private var finished = false
-        private var stroke: GestureDescription.StrokeDescription? = null
+        private var strokes: List<GestureDescription.StrokeDescription> = emptyList()
 
         fun begin() {
-            val path = Path().apply { moveTo(last.x, last.y) }
-            val s = GestureDescription.StrokeDescription(path, 0, SEGMENT_MS, true)
-            stroke = s
-            send(s)
+            strokes = last.map { p ->
+                GestureDescription.StrokeDescription(Path().apply { moveTo(p.x, p.y) }, 0, SEGMENT_MS, true)
+            }
+            send()
         }
 
-        fun moveTo(p: PointF) {
-            target = p
+        fun moveTo(points: List<PointF>) {
+            if (points.size == last.size) target = points
         }
 
-        /** p == null — отпустить там, где палец сейчас. */
-        fun end(p: PointF?) {
-            if (p != null) target = p
+        /** points == null — отпустить там, где пальцы сейчас. */
+        fun end(points: List<PointF>?) {
+            if (points != null && points.size == last.size) target = points
             ending = true
         }
 
         private fun next() {
-            if (finished) return
-            val prev = stroke ?: return
+            if (finished || strokes.isEmpty()) return
             val from = last
             val to = target
             val isFinal = ending
-            val path = Path().apply {
-                moveTo(from.x, from.y)
-                lineTo(to.x, to.y)
+            strokes = strokes.mapIndexed { i, prev ->
+                val path = Path().apply {
+                    moveTo(from[i].x, from[i].y)
+                    lineTo(to[i].x, to[i].y)
+                }
+                prev.continueStroke(path, 0, SEGMENT_MS, !isFinal)
             }
-            val s = prev.continueStroke(path, 0, SEGMENT_MS, !isFinal)
             last = to
-            stroke = s
             if (isFinal) finished = true
-            send(s)
+            send()
         }
 
-        private fun send(s: GestureDescription.StrokeDescription) {
+        private fun send() {
+            val builder = GestureDescription.Builder()
+            strokes.forEach { builder.addStroke(it) }
             val ok = dispatchGesture(
-                GestureDescription.Builder().addStroke(s).build(),
+                builder.build(),
                 object : GestureResultCallback() {
                     override fun onCompleted(gestureDescription: GestureDescription?) = next()
                     override fun onCancelled(gestureDescription: GestureDescription?) {
@@ -180,21 +237,6 @@ class AirInputService : AccessibilityService() {
             )
             if (!ok) finished = true
         }
-    }
-
-    /** Координаты — доли экрана. Не начинаем у самого края, чтобы не задеть системный жест «назад». */
-    private fun swipe(fromX: Float, fromY: Float, toX: Float, toY: Float, durationMs: Long = 200) {
-        val bounds = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
-        val w = bounds.width().toFloat()
-        val h = bounds.height().toFloat()
-        val path = Path().apply {
-            moveTo(fromX * w, fromY * h)
-            lineTo(toX * w, toY * h)
-        }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
-            .build()
-        dispatchGesture(gesture, null, null)
     }
 
     companion object {

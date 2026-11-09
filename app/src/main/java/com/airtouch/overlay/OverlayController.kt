@@ -17,7 +17,9 @@ import android.view.WindowManager
 import android.widget.TextView
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
+import android.graphics.RectF
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.SystemAction
 import com.airtouch.ui.ToggleActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -172,6 +174,21 @@ private class TrackerView(context: Context) : View(context) {
     }
     private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x993B82F6.toInt() }
     private val cursorPressed = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
+    private val holdTrack = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 6 * d; color = 0x55FFFFFF
+    }
+    private val holdArc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 6 * d; strokeCap = Paint.Cap.ROUND; color = 0xFFF59E0B.toInt()
+    }
+    private val labelText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt(); textSize = 16 * d; textAlign = Paint.Align.CENTER; isFakeBoldText = true
+        setShadowLayer(4 * d, 0f, 0f, 0xCC000000.toInt())
+    }
+    private val bigLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt(); textSize = 26 * d; textAlign = Paint.Align.CENTER; isFakeBoldText = true
+        setShadowLayer(6 * d, 0f, 0f, 0xCC000000.toInt())
+    }
+    private val arcRect = RectF()
     private val bannerBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6B45309.toInt() }
     private val bannerText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); textSize = 14 * d; textAlign = Paint.Align.CENTER
@@ -194,7 +211,33 @@ private class TrackerView(context: Context) : View(context) {
             canvas.drawText(text, cx, top + 21 * d, bannerText)
         }
 
+        // Вспышка «Домой / Назад / Недавние» по центру экрана.
+        val actionAge = SystemClock.uptimeMillis() - s.lastActionAt
+        if (s.lastAction != null && actionAge in 0 until ACTION_FLASH_MS) {
+            bigLabel.alpha = (255 * (1 - actionAge / ACTION_FLASH_MS.toFloat())).toInt()
+            canvas.drawText(label(s.lastAction), width / 2f, height * 0.45f, bigLabel)
+            postInvalidateOnAnimation()
+        }
+
         if (s.mode != Mode.ACTIVE || !s.handVisible) return
+
+        val px = s.palmX * width
+        val py = s.palmY * height
+
+        // Кольцо удержания позы.
+        if (s.holdAction != null) {
+            val r = 28 * d
+            arcRect.set(px - r, py - r, px + r, py + r)
+            canvas.drawOval(arcRect, holdTrack)
+            canvas.drawArc(arcRect, -90f, 360f * s.holdProgress.coerceIn(0f, 1f), false, holdArc)
+            canvas.drawText(label(s.holdAction), px, py - r - 10 * d, labelText)
+            return
+        }
+
+        if (s.zooming) {
+            canvas.drawText("🔍 масштаб", px, py, labelText)
+            return
+        }
 
         if (s.cursorVisible) {
             val cx = s.cursorX * width
@@ -224,6 +267,12 @@ private class TrackerView(context: Context) : View(context) {
         canvas.drawCircle(x, y, 10 * d, ringPaint)
     }
 
+    private fun label(a: SystemAction) = when (a) {
+        SystemAction.HOME -> "⌂ Домой"
+        SystemAction.BACK -> "← Назад"
+        SystemAction.RECENTS -> "▣ Недавние"
+    }
+
     private fun arrow(g: AirGesture) = when (g) {
         AirGesture.SwipeLeft -> "←"
         AirGesture.SwipeRight -> "→"
@@ -233,5 +282,6 @@ private class TrackerView(context: Context) : View(context) {
 
     private companion object {
         const val FLASH_MS = 350L
+        const val ACTION_FLASH_MS = 700L
     }
 }

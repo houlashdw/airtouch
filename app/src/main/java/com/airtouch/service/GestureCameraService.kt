@@ -12,9 +12,16 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
+import android.hardware.camera2.CaptureRequest
 import android.os.SystemClock
 import android.util.Log
+import android.util.Range
 import android.util.Size
+import androidx.annotation.OptIn
+import androidx.camera.camera2.interop.Camera2Interop
+import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -30,7 +37,9 @@ import com.airtouch.R
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.core.Timeouts
+import com.airtouch.gesture.EngineOutput
 import com.airtouch.gesture.GestureEngine
+import com.airtouch.gesture.inverted
 import com.airtouch.gesture.HandFrame
 import com.airtouch.settings.AirTouchSettings
 import com.airtouch.ui.MainActivity
@@ -70,6 +79,9 @@ class GestureCameraService : LifecycleService() {
     @Volatile private var handVisible = false
     @Volatile private var lastHandSeenAt = 0L
     @Volatile private var paused = false
+    @Volatile private var invertSwipes = false
+    /** Уже проверили «вылет» руки за кадр для текущей пропажи. */
+    @Volatile private var missingHandled = false
     /** Сброс движка просим у потока MediaPipe — он единственный, кто трогает engine. */
     @Volatile private var resetRequested = false
     private var frameCounter = 0L   // только cameraExecutor
@@ -77,6 +89,7 @@ class GestureCameraService : LifecycleService() {
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         engine.config = settings.engineConfig()
+        invertSwipes = settings.invertSwipes
         if (key == AirTouchSettings.KEY_FRONT_CAMERA && !paused) bindCamera()
     }
 
@@ -129,6 +142,7 @@ class GestureCameraService : LifecycleService() {
         }
 
         engine.config = settings.engineConfig()
+        invertSwipes = settings.invertSwipes
         resetRequested = true
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
         ContextCompat.registerReceiver(
@@ -210,6 +224,25 @@ class GestureCameraService : LifecycleService() {
 
     // ---------------- Камера ----------------
 
+    /**
+     * Фиксированные 30 FPS. По умолчанию в помещении камера опускается до 15 FPS с длинной выдержкой —
+     * быстрый мах превращается в размазанное пятно, и MediaPipe теряет руку.
+     */
+    private fun bestFpsRange(front: Boolean): Range<Int>? = try {
+        val cm = getSystemService(CameraManager::class.java)
+        val facing = if (front) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
+        val id = cm.cameraIdList.firstOrNull {
+            cm.getCameraCharacteristics(it).get(CameraCharacteristics.LENS_FACING) == facing
+        }
+        id?.let { cm.getCameraCharacteristics(it).get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) }
+            ?.filter { it.upper <= 30 }
+            ?.maxWithOrNull(compareBy<Range<Int>>({ it.lower }, { it.upper }))
+    } catch (e: Exception) {
+        Log.w(TAG, "fps ranges unavailable", e)
+        null
+    }
+
+    @OptIn(markerClass = [ExperimentalCamera2Interop::class])
     private fun bindCamera() {
         val future = ProcessCameraProvider.getInstance(this)
         future.addListener({
@@ -227,7 +260,7 @@ class GestureCameraService : LifecycleService() {
             val selector = if (front) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
 
             // 640×480 хватает MediaPipe с запасом и сильно экономит батарею.
-            val analysis = ImageAnalysis.Builder()
+            val analysisBuilder = ImageAnalysis.Builder()
                 .setResolutionSelector(
                     ResolutionSelector.Builder()
                         .setResolutionStrategy(
@@ -240,7 +273,12 @@ class GestureCameraService : LifecycleService() {
                 )
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
-                .build()
+            bestFpsRange(front)?.let { range ->
+                Log.i(TAG, "AE target fps range: $range")
+                Camera2Interop.Extender(analysisBuilder)
+                    .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+            }
+            val analysis = analysisBuilder.build()
             analysis.setAnalyzer(cameraExecutor, ::analyze)
 
             try {
@@ -278,29 +316,39 @@ class GestureCameraService : LifecycleService() {
         val input = AirInputService.instance
         if (resetRequested) {
             resetRequested = false
-            engine.onHandLost()?.let { input?.touch(it) }
+            dispatch(engine.onHandLost(), input)
         }
+        val now = SystemClock.uptimeMillis()
         if (frame == null) {
-            // При быстром махе MediaPipe может потерять смазанную руку на 1–3 кадра.
-            // Сбрасываем движок, только если руки нет дольше HAND_LOST_GRACE_MS.
-            if (handVisible && SystemClock.uptimeMillis() - lastHandSeenAt > Timeouts.HAND_LOST_GRACE_MS) {
+            if (!handVisible) return
+            // Первый кадр без руки: возможно, это резкий мах «за край» — засчитываем сразу.
+            if (!missingHandled) {
+                missingHandled = true
+                val out = engine.onHandMissing(now)
+                dispatch(out, input)
+                if (out.swipe != null) publishSwipe(out, now)
+            }
+            // MediaPipe может потерять смазанную руку на 1–3 кадра — сбрасываем жесты не сразу.
+            if (now - lastHandSeenAt > Timeouts.HAND_LOST_GRACE_MS) {
                 handVisible = false
-                engine.onHandLost()?.let { input?.touch(it) }
-                AirTouchState.update { it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false) }
+                dispatch(engine.onHandLost(), input)
+                AirTouchState.update {
+                    it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false,
+                        holdAction = null, zooming = false)
+                }
             }
             return
         }
 
-        val now = SystemClock.uptimeMillis()
         lastHandSeenAt = now
         handVisible = true
+        missingHandled = false
         economy = false
 
         val out = engine.process(frame)
-        out.swipe?.let { input?.perform(it) }
-        out.touch?.let { input?.touch(it) }
+        dispatch(out, input)
 
-        val palm = engine.lastPalm
+        val palm = engine.palm
         val cursor = engine.cursor
         AirTouchState.update { s ->
             s.copy(
@@ -313,10 +361,27 @@ class GestureCameraService : LifecycleService() {
                 cursorX = cursor?.x ?: s.cursorX,
                 cursorY = cursor?.y ?: s.cursorY,
                 pinching = cursor?.pinching == true,
+                holdAction = out.hold?.action,
+                holdProgress = out.hold?.progress ?: 0f,
+                zooming = engine.isZooming,
                 lastGesture = out.swipe ?: s.lastGesture,
                 lastGestureAt = if (out.swipe != null) now else s.lastGestureAt,
+                lastAction = out.action ?: s.lastAction,
+                lastActionAt = if (out.action != null) now else s.lastActionAt,
             )
         }
+    }
+
+    private fun dispatch(out: EngineOutput, input: AirInputService?) {
+        if (input == null) return
+        out.touch?.let { input.touch(it) }
+        out.zoom?.let { input.zoom(it) }
+        out.swipe?.let { input.perform(if (invertSwipes) it.inverted() else it) }
+        out.action?.let { input.system(it) }
+    }
+
+    private fun publishSwipe(out: EngineOutput, now: Long) {
+        AirTouchState.update { it.copy(lastGesture = out.swipe, lastGestureAt = now) }
     }
 
     private fun onTrackerError(e: Throwable) {

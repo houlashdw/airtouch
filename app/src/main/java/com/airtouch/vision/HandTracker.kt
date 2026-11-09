@@ -42,9 +42,9 @@ class HandTracker(
             .setBaseOptions(base)
             .setRunningMode(RunningMode.LIVE_STREAM)
             .setNumHands(1)
-            .setMinHandDetectionConfidence(0.5f)
-            .setMinHandPresenceConfidence(0.5f)
-            .setMinTrackingConfidence(0.5f)
+            .setMinHandDetectionConfidence(0.4f)
+            .setMinHandPresenceConfidence(0.4f)
+            .setMinTrackingConfidence(0.4f)
             .setResultListener { result: HandLandmarkerResult, image: MPImage -> handle(result, image) }
             .setErrorListener { e -> onError(e) }
             .build()

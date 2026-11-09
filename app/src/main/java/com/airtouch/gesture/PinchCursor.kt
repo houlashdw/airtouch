@@ -132,6 +132,14 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         /** Расстояние между кончиками большого и указательного относительно длины ладони. */
         fun pinchRatio(frame: HandFrame): Float =
             frame.dist(Lm.THUMB_TIP, Lm.INDEX_TIP) / frame.dist(Lm.WRIST, Lm.MIDDLE_MCP).coerceAtLeast(1e-4f)
+
+        /**
+         * Похоже на щипок: кончики сведены И указательный вытянут вперёд за костяшку.
+         * Второе условие отсекает кулак, где большой палец тоже лежит у указательного.
+         */
+        fun isPinchShape(frame: HandFrame, threshold: Float): Boolean =
+            pinchRatio(frame) < threshold &&
+                frame.dist(Lm.WRIST, Lm.INDEX_TIP) > frame.dist(Lm.WRIST, Lm.INDEX_MCP) * 1.25f
     }
 }
 
