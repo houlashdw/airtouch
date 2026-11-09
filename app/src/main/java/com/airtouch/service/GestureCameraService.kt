@@ -145,7 +145,7 @@ class GestureCameraService : LifecycleService() {
         shutdown(Mode.ERROR, message)
     }
 
-    /** Авто-эконом через 3 с без руки, авто-сон через 10 с без руки и жестов. */
+    /** Авто-эконом через 3 с без руки, авто-сон через 30 с без руки и жестов. */
     private fun startWatchdog() {
         watchdog = lifecycleScope.launch {
             while (isActive) {
@@ -231,10 +231,12 @@ class GestureCameraService : LifecycleService() {
     private fun onHand(frame: HandFrame?) {
         if (!isRunning) return
         if (frame == null) {
-            if (handVisible) {
+            // При быстром махе MediaPipe может потерять смазанную руку на 1–3 кадра.
+            // Сбрасываем детектор, только если руки нет дольше HAND_LOST_GRACE_MS.
+            if (handVisible && SystemClock.uptimeMillis() - lastHandSeenAt > Timeouts.HAND_LOST_GRACE_MS) {
                 handVisible = false
                 detector.onHandLost()
-                AirTouchState.update { it.copy(handVisible = false) }
+                AirTouchState.update { it.copy(handVisible = false, pose = null) }
             }
             return
         }
@@ -254,6 +256,7 @@ class GestureCameraService : LifecycleService() {
             s.copy(
                 mode = Mode.ACTIVE,
                 handVisible = true,
+                pose = detector.lastPose,
                 palmX = palm?.x ?: s.palmX,
                 palmY = palm?.y ?: s.palmY,
                 lastGesture = gesture ?: s.lastGesture,

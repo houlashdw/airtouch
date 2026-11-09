@@ -123,6 +123,13 @@ class GestureDetectorTest {
     }
 
     @Test
+    fun pointingFinger_alsoSwipes() {
+        val sim = Sim().apply { pose = booleanArrayOf(true, false, false, false) }
+            .at(0.2f, 0.5f).hold(200).move(0.8f, 0.5f, 250).hold(300)
+        assertEquals(listOf(AirGesture.SwipeRight), sim.events)
+    }
+
+    @Test
     fun fist_doesNotSwipe() {
         val sim = Sim().apply { pose = fist }.at(0.2f, 0.5f).hold(200).move(0.8f, 0.5f, 250)
         assertEquals(emptyList<AirGesture>(), sim.events)

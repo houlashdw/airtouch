@@ -27,7 +27,7 @@ data class SwipeConfig(
     /** 0.5…2.0. Больше — короче нужен мах. */
     val sensitivity: Float = 1f,
     /** Длина маха при sensitivity = 1, в долях короткой стороны кадра. */
-    val baseDistance: Float = 0.30f,
+    val baseDistance: Float = 0.25f,
     /** Мёртвая зона: сдвиги центра ладони меньше этого считаются дрожанием и гасятся. */
     val deadZone: Float = 0.012f,
     /** Окно, в котором ищем мах. Медленный дрейф дольше окна свайпом не станет. */
@@ -51,7 +51,7 @@ data class SwipeConfig(
 }
 
 /**
- * Распознавание свайпа открытой ладонью.
+ * Распознавание свайпа ладонью или пальцем (кулак игнорируется).
  *
  * Алгоритм:
  * 1. Берём центр ладони, сглаживаем EMA и гасим дрожание мёртвой зоной.
@@ -136,7 +136,8 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
             return null
         }
 
-        if (pose != HandPose.OPEN_PALM || !cfg.activationZone.contains(raw.y)) {
+        // Мах ладонью или пальцем — оба считаются. Кулак зарезервирован под drag (этап 3).
+        if (pose == HandPose.FIST || !cfg.activationZone.contains(raw.y)) {
             history.clear()
             return null
         }

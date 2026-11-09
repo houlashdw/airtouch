@@ -51,6 +51,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.HandPose
 import com.airtouch.service.AirInputService
 import com.airtouch.service.GestureCameraService
 import com.airtouch.settings.AirTouchSettings
@@ -157,10 +158,12 @@ private fun AirTouchScreen() {
             ElevatedCard {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Как махать", style = MaterialTheme.typography.titleMedium)
-                    Text("• Ладонь раскрыта, пальцы вверх, 30–60 см от камеры.")
-                    Text("• Мах быстрый и широкий — примерно на треть кадра.")
+                    Text("• Рука целиком в кадре фронталки: 20–40 см от телефона, не вплотную.")
+                    Text("• Ладонь или палец — неважно. Мах быстрый, примерно на четверть ширины кадра.")
+                    Text("• Проверьте прямо здесь: строки «Вижу» и «Последний жест» выше.")
                     Text("• После маха задержите руку на долю секунды: обратное движение не считается.")
                     Text("• Кулак и медленные движения игнорируются.")
+                    Text("• Если не видит руку — включите свет: в темноте точность падает.")
                 }
             }
         }
@@ -201,7 +204,7 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
         Mode.OFF -> "Выключено"
         Mode.ACTIVE -> if (status.handVisible) "Рука видна ✋" else "Ищу руку…"
         Mode.IDLE -> "Экономия: руки нет больше 3 с"
-        Mode.SLEEPING -> "Уснул: 10 с без руки. Включите снова кнопкой ✋"
+        Mode.SLEEPING -> "Уснул: 30 с без руки. Включите снова кнопкой ✋"
         Mode.ERROR -> status.error ?: "Ошибка"
     }
     val lastGesture = when (status.lastGesture) {
@@ -217,6 +220,16 @@ private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: 
             Text(stateText)
             if (status.isRunning && status.lowLight) {
                 Text("⚠️ Мало света — точность снижена", color = MaterialTheme.colorScheme.error)
+            }
+            if (status.mode == Mode.ACTIVE) {
+                val seen = when (status.pose) {
+                    HandPose.OPEN_PALM -> "ладонь ✋ — можно махать"
+                    HandPose.POINTING -> "палец ☝️ — можно махать"
+                    HandPose.V_SIGN, HandPose.OTHER -> "руку — можно махать"
+                    HandPose.FIST -> "кулак ✊ — разожмите руку"
+                    null -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
+                }
+                Text("Вижу: $seen")
             }
             if (lastGesture != null) Text("Последний жест: $lastGesture")
             Button(onClick = onToggle, enabled = ready || status.isRunning, modifier = Modifier.fillMaxWidth()) {
