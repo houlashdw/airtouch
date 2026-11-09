@@ -137,11 +137,23 @@ class AirPipelineTest {
 
     @Test
     fun quickFlick_scrollsList() {
-        Hand(0.4f, 0.9f).hold(400).hold(100, pinch = true).move(0.4f, 0.5f, 200, pinch = true).hold(300)
+        val before = AirInputService.Stats.toString()
+        val hand = Hand(0.4f, 0.9f).hold(400).hold(100, pinch = true).move(0.4f, 0.5f, 200, pinch = true).hold(300)
         Thread.sleep(1500)
         val y = scrollY()
-        assertTrue("flick should scroll, scrollY=$y", y > 150)
+        assertTrue(
+            "flick should scroll, scrollY=$y touches=${hand.touches} before=[$before] after=[${AirInputService.Stats}]",
+            y > 150,
+        )
         assertEquals("long presses", 0, TestScreenActivity.longPresses.get())
+    }
+
+    @Test
+    fun mediumFlick_scrollsList() {
+        val hand = Hand(0.4f, 0.9f).hold(400).hold(100, pinch = true).move(0.4f, 0.5f, 400, pinch = true).hold(300)
+        Thread.sleep(1500)
+        val y = scrollY()
+        assertTrue("medium flick should scroll, scrollY=$y touches=${hand.touches} stats=[${AirInputService.Stats}]", y > 150)
     }
 
     @Test

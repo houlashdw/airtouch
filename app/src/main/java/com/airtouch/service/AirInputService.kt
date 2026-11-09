@@ -12,6 +12,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -246,14 +247,23 @@ class AirInputService : AccessibilityService() {
             val ok = dispatchGesture(
                 builder.build(),
                 object : GestureResultCallback() {
-                    override fun onCompleted(gestureDescription: GestureDescription?) = next()
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        Stats.segmentsCompleted++
+                        next()
+                    }
                     override fun onCancelled(gestureDescription: GestureDescription?) {
+                        Stats.segmentsCancelled++
+                        Log.w(TAG, "touch segment cancelled (ending=$ending)")
                         finished = true
                     }
                 },
                 main,
             )
-            if (!ok) finished = true
+            if (!ok) {
+                Stats.dispatchFailed++
+                Log.w(TAG, "dispatchGesture rejected")
+                finished = true
+            }
         }
     }
 
@@ -319,7 +329,16 @@ class AirInputService : AccessibilityService() {
         }
     }
 
+    /** Счётчики для диагностики (сквозные тесты печатают их при ошибке). */
+    object Stats {
+        @Volatile var segmentsCompleted = 0
+        @Volatile var segmentsCancelled = 0
+        @Volatile var dispatchFailed = 0
+        override fun toString() = "segments ok=$segmentsCompleted cancelled=$segmentsCancelled rejected=$dispatchFailed"
+    }
+
     companion object {
+        private const val TAG = "AirTouch/Input"
         private const val TAP_MS = 50L
         /** Длина одного куска перетаскивания; ~частота кадров камеры. */
         private const val SEGMENT_MS = 40L
