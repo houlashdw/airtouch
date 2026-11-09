@@ -62,6 +62,10 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
     var lastPose: HandPose = HandPose.OTHER
         private set
 
+    /** Открыта воздушная клавиатура: рука — курсор по клавишам, щипок — печать; махи и тык выключены. */
+    @Volatile
+    var keyboardMode = false
+
     /** Курсор, если сейчас курсорный режим, иначе null. */
     val cursor: Cursor? get() = if (cursorMode) pointer.cursor else null
 
@@ -91,6 +95,17 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         lastPose = pose
         palm = frame.palmCenter
 
+        if (keyboardMode) {
+            poke.reset()
+            if (!cursorMode) {
+                cursorMode = true
+                swipes.disarm()
+            }
+            val touch = pointer.process(frame)
+            val (action, hold) = if (pointer.isTouching) null to null else backHold(pose, frame, cfg)
+            return EngineOutput(touch = touch, action = action, hold = hold)
+        }
+
         // 1. Тык — любой формой руки. Пока он идёт, всё остальное молчит.
         val pk = poke.process(frame)
         if (pk.active || pk.action != null) {
@@ -117,30 +132,37 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         palm = swipes.lastPalm ?: palm
 
         // 4. ✌️ неподвижно — назад.
-        var action: SystemAction? = null
-        var hold: Hold? = null
-        if (pose == HandPose.V_SIGN && swipe == null) {
-            vMismatch = 0
-            val p = frame.palmCenter.x * frame.xScale to frame.palmCenter.y * frame.yScale
-            val start = vStart
-            if (vSince == null || start == null ||
-                kotlin.math.hypot(p.first - start.first, p.second - start.second) > cfg.backMaxDrift
-            ) {
-                vSince = t
-                vStart = p
-            }
-            val progress = (t - vSince!!).toFloat() / cfg.backHoldMs
-            if (!vFired && progress >= 1f) {
-                vFired = true
-                action = SystemAction.BACK
-            } else if (!vFired && t - vSince!! > 120) {
-                hold = Hold(SystemAction.BACK, progress)
-            }
-        } else if (++vMismatch > cfg.poseToleranceFrames || swipe != null) {
-            resetV()
-        }
-
+        if (swipe != null) resetV()
+        val (action, hold) = if (swipe == null) backHold(pose, frame, cfg) else null to null
         return EngineOutput(swipe = swipe, touch = up, action = action, hold = hold)
+    }
+
+    private fun backHold(pose: HandPose, frame: HandFrame, cfg: EngineConfig): Pair<SystemAction?, Hold?> {
+        val t = frame.timestampMs
+        if (pose != HandPose.V_SIGN) {
+            if (++vMismatch > cfg.poseToleranceFrames) resetV()
+            return null to null
+        }
+        vMismatch = 0
+        val p = frame.palmCenter.x * frame.xScale to frame.palmCenter.y * frame.yScale
+        val start = vStart
+        if (vSince == null || start == null ||
+            kotlin.math.hypot(p.first - start.first, p.second - start.second) > cfg.backMaxDrift
+        ) {
+            vSince = t
+            vStart = p
+        }
+        val since = vSince!!
+        val progress = (t - since).toFloat() / cfg.backHoldMs
+        return when {
+            vFired -> null to null
+            progress >= 1f -> {
+                vFired = true
+                SystemAction.BACK to null
+            }
+            t - since > 120 -> null to Hold(SystemAction.BACK, progress)
+            else -> null to null
+        }
     }
 
     private fun leaveCursor(): TouchEvent? {

@@ -3,6 +3,7 @@ package com.airtouch.core
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.HandPose
 import com.airtouch.gesture.SystemAction
+import com.airtouch.keyboard.KeyboardView
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +44,18 @@ object AirTouchState {
         val holdProgress: Float = 0f,
         /** Реальная частота обработки кадров и задержка распознавания — для диагностики «тормозов». */
         val fps: Int = 0,
+        /** Системная клавиатура открыта — поверх неё рисуем воздушную. Прямоугольник — в пикселях экрана. */
+        val keyboardVisible: Boolean = false,
+        val kbLeft: Int = 0,
+        val kbTop: Int = 0,
+        val kbRight: Int = 0,
+        val kbBottom: Int = 0,
+        val keyboard: KeyboardView? = null,
+        /** Курсор над клавиатурой (доли её прямоугольника). */
+        val kbCursorX: Float = 0.5f,
+        val kbCursorY: Float = 0.5f,
+        val kbCursorVisible: Boolean = false,
+        val kbPinching: Boolean = false,
         val latencyMs: Int = 0,
         val lastAction: SystemAction? = null,
         val lastActionAt: Long = 0L,

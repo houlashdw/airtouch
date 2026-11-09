@@ -164,6 +164,7 @@ private fun AirTouchScreen() {
                     Text("👉 Тык и задержать руку у экрана — недавние приложения")
                     Text("✌️ «V» неподвижно полсекунды — назад")
                     Text("☝️🤏 Курсор и щипок — включаются отдельно в настройках")
+                    Text("⌨️ Поле ввода → воздушная клавиатура: 🤏 росчерк через буквы — слово, быстрый щипок — буква, ⌫ после росчерка стирает слово, ✌️ — закрыть")
                     Text("Удержание показывает кольцо — передумали, уберите руку, пока кольцо не замкнулось.",
                         style = MaterialTheme.typography.bodySmall)
                 }
@@ -299,6 +300,7 @@ private fun SettingsCard(settings: AirTouchSettings) {
     var front by remember { mutableStateOf(settings.useFrontCamera) }
     var cursor by remember { mutableStateOf(settings.cursorEnabled) }
     var invert by remember { mutableStateOf(settings.invertSwipes) }
+    var airKeyboard by remember { mutableStateOf(settings.airKeyboard) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -310,6 +312,13 @@ private fun SettingsCard(settings: AirTouchSettings) {
                     "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
+
+            SwitchRow(
+                title = "Воздушная клавиатура",
+                subtitle = "Открыли поле ввода — поверх обычной клавиатуры появляется воздушная. " +
+                    "🤏 щипок и росчерк через буквы — слово, быстрый щипок — буква, ✌️ — закрыть.",
+                checked = airKeyboard,
+            ) { airKeyboard = it; settings.airKeyboard = it }
 
             SwitchRow(
                 title = "Обратное направление махов",

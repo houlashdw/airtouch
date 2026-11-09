@@ -40,6 +40,11 @@ import com.airtouch.core.Timeouts
 import com.airtouch.gesture.EngineOutput
 import com.airtouch.gesture.GestureEngine
 import com.airtouch.gesture.inverted
+import com.airtouch.keyboard.Dictionary
+import com.airtouch.keyboard.GlideDecoder
+import com.airtouch.keyboard.KeyboardController
+import com.airtouch.keyboard.KeyboardLayout
+import com.airtouch.keyboard.Lang
 import com.airtouch.gesture.HandFrame
 import com.airtouch.settings.AirTouchSettings
 import com.airtouch.ui.MainActivity
@@ -106,7 +111,34 @@ class GestureCameraService : LifecycleService() {
     override fun onCreate() {
         super.onCreate()
         settings = AirTouchSettings(this)
+        loadDictionaries()
     }
+
+    // ---------------- Воздушная клавиатура ----------------
+
+    @Volatile private var decoders: Map<Lang, GlideDecoder> = emptyMap()
+    private var keyboard: KeyboardController? = null // только поток MediaPipe
+
+    /** Словари RU/EN (~1 МБ) грузим в фоне один раз — к первому открытию клавиатуры они готовы. */
+    private fun loadDictionaries() {
+        Thread {
+            try {
+                decoders = Lang.values().associateWith { lang ->
+                    assets.open(Dictionary.assetName(lang)).bufferedReader().use {
+                        GlideDecoder(KeyboardLayout.of(lang), Dictionary.parse(it))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "dictionaries failed", e)
+            }
+        }.apply {
+            name = "airtouch-dict"
+            isDaemon = true
+        }.start()
+    }
+
+    private fun keyboardFor(input: AirInputService): KeyboardController =
+        keyboard ?: KeyboardController(input.textSink, { decoders[it] }).also { keyboard = it }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -332,10 +364,11 @@ class GestureCameraService : LifecycleService() {
             // MediaPipe может потерять смазанную руку на 1–3 кадра — сбрасываем жесты не сразу.
             if (now - lastHandSeenAt > Timeouts.HAND_LOST_GRACE_MS) {
                 handVisible = false
-                dispatch(engine.onHandLost(), input)
+                val lost = engine.onHandLost()
+                if (engine.keyboardMode) keyboard?.cancelStroke() else dispatch(lost, input)
                 AirTouchState.update {
                     it.copy(handVisible = false, pose = null, cursorVisible = false, pinching = false,
-                        holdAction = null)
+                        holdAction = null, kbCursorVisible = false, keyboard = keyboard?.view())
                 }
             }
             return
@@ -347,11 +380,25 @@ class GestureCameraService : LifecycleService() {
         missingHandled = false
         economy = false
 
+        // Открыта системная клавиатура → рука печатает на воздушной.
+        val kbOn = AirTouchState.status.value.keyboardVisible && input != null
+        if (engine.keyboardMode != kbOn) {
+            engine.keyboardMode = kbOn
+            if (!kbOn) keyboard?.reset()
+        }
+
         val out = engine.process(frame)
-        dispatch(out, input)
+        val cursor = engine.cursor
+        val kb = if (kbOn && input != null) keyboardFor(input) else null
+        if (kb != null) {
+            cursor?.let { kb.onCursor(it.x, it.y) }
+            out.touch?.let { kb.onTouch(it) }
+            out.action?.let { input?.system(it) }
+        } else {
+            dispatch(out, input)
+        }
 
         val palm = engine.palm
-        val cursor = engine.cursor
         AirTouchState.update { s ->
             s.copy(
                 mode = Mode.ACTIVE,
@@ -359,10 +406,15 @@ class GestureCameraService : LifecycleService() {
                 pose = engine.lastPose,
                 palmX = palm?.x ?: s.palmX,
                 palmY = palm?.y ?: s.palmY,
-                cursorVisible = cursor != null,
+                cursorVisible = kb == null && cursor != null,
+                kbCursorVisible = kb != null && cursor != null,
+                kbCursorX = cursor?.x ?: s.kbCursorX,
+                kbCursorY = cursor?.y ?: s.kbCursorY,
+                kbPinching = kb != null && cursor?.pinching == true,
+                keyboard = kb?.view() ?: s.keyboard,
                 cursorX = cursor?.x ?: s.cursorX,
                 cursorY = cursor?.y ?: s.cursorY,
-                pinching = cursor?.pinching == true,
+                pinching = kb == null && cursor?.pinching == true,
                 holdAction = out.hold?.action,
                 holdProgress = out.hold?.progress ?: 0f,
                 fps = fps,

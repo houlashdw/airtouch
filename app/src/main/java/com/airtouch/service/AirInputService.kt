@@ -7,11 +7,18 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Path
 import android.graphics.PointF
+import android.graphics.Rect
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
+import com.airtouch.core.AirTouchState
+import com.airtouch.keyboard.TextSink
+import com.airtouch.settings.AirTouchSettings
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.SystemAction
 import com.airtouch.gesture.TouchEvent
@@ -32,14 +39,47 @@ class AirInputService : AccessibilityService() {
     private val main = Handler(Looper.getMainLooper())
     private var overlay: OverlayController? = null
     private var drag: TouchSession? = null
+    private lateinit var settings: AirTouchSettings
+
+    /** Поле ввода, где стоит курсор, — сюда печатает воздушная клавиатура. */
+    val textSink: TextSink = FocusedFieldSink()
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        settings = AirTouchSettings(this)
         overlay = OverlayController(this).also { it.show() }
+        updateKeyboardState()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        when (event?.eventType) {
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> updateKeyboardState()
+        }
+    }
+
+    /** Открыта системная клавиатура → показываем поверх неё воздушную, в тех же границах. */
+    private fun updateKeyboardState() {
+        val ime = if (::settings.isInitialized && settings.airKeyboard) {
+            try {
+                windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+            } catch (e: Exception) {
+                null
+            }
+        } else null
+        val r = Rect()
+        ime?.getBoundsInScreen(r)
+        val visible = ime != null && r.width() > 0 && r.height() > 0
+        val s = AirTouchState.status.value
+        if (s.keyboardVisible == visible && s.kbLeft == r.left && s.kbTop == r.top &&
+            s.kbRight == r.right && s.kbBottom == r.bottom
+        ) return
+        AirTouchState.update {
+            it.copy(keyboardVisible = visible, kbLeft = r.left, kbTop = r.top, kbRight = r.right, kbBottom = r.bottom)
+        }
+    }
 
     override fun onInterrupt() = Unit
 
@@ -213,6 +253,68 @@ class AirInputService : AccessibilityService() {
                 main,
             )
             if (!ok) finished = true
+        }
+    }
+
+    /**
+     * Печать в поле ввода через специальные возможности: читаем текст и позицию курсора,
+     * вставляем/стираем и ставим курсор после вставки. Работает в обычных полях; в некоторых
+     * веб-страницах и играх поля «нестандартные» — там текст может не вставиться.
+     */
+    private inner class FocusedFieldSink : TextSink {
+        private fun field(): AccessibilityNodeInfo? =
+            findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.also { it.refresh() }?.takeIf { it.isEditable && !it.isPassword }
+
+        private fun state(n: AccessibilityNodeInfo): Triple<String, Int, Int> {
+            val text = if (n.isShowingHintText) "" else n.text?.toString() ?: ""
+            var start = n.textSelectionStart
+            var end = n.textSelectionEnd
+            if (start < 0 || start > text.length) start = text.length
+            if (end < start || end > text.length) end = start
+            return Triple(text, start, end)
+        }
+
+        override fun textBeforeCursor(): String? {
+            val n = field() ?: return null
+            val (text, start, _) = state(n)
+            return text.substring(0, start)
+        }
+
+        override fun insert(text: String) {
+            val n = field() ?: return
+            val (cur, start, end) = state(n)
+            set(n, cur.substring(0, start) + text + cur.substring(end), start + text.length)
+        }
+
+        override fun deleteBefore(count: Int) {
+            val n = field() ?: return
+            val (cur, start, end) = state(n)
+            if (start != end) {
+                set(n, cur.removeRange(start, end), start)
+            } else {
+                val from = (start - count).coerceAtLeast(0)
+                set(n, cur.removeRange(from, start), from)
+            }
+        }
+
+        override fun enter() {
+            field()?.performAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_IME_ENTER.id)
+        }
+
+        private fun set(n: AccessibilityNodeInfo, text: String, cursor: Int) {
+            n.performAction(
+                AccessibilityNodeInfo.ACTION_SET_TEXT,
+                Bundle().apply {
+                    putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text)
+                },
+            )
+            n.performAction(
+                AccessibilityNodeInfo.ACTION_SET_SELECTION,
+                Bundle().apply {
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, cursor)
+                    putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, cursor)
+                },
+            )
         }
     }
 

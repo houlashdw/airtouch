@@ -1,9 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Нам не нужно читать содержимое окон: только выполнять жесты. Минимум прав = проще пройти ревью. -->
+<!--
+  canRetrieveWindowContent + flagRetrieveInteractiveWindows нужны воздушной клавиатуре:
+  понять, что открыта системная клавиатура, и вписать текст в поле ввода, где стоит курсор.
+  Текст полей никуда не отправляется.
+-->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowsChanged|typeWindowStateChanged|typeViewFocused|typeViewTextChanged|typeViewTextSelectionChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows"
     android:canPerformGestures="true"
-    android:canRetrieveWindowContent="false"
+    android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_description"
-    android:notificationTimeout="100" />
+    android:notificationTimeout="50" />

@@ -37,6 +37,10 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_CURSOR, false)
         set(v) = prefs.edit { putBoolean(KEY_CURSOR, v) }
 
+    var airKeyboard: Boolean
+        get() = prefs.getBoolean(KEY_AIR_KEYBOARD, true)
+        set(v) = prefs.edit { putBoolean(KEY_AIR_KEYBOARD, v) }
+
     var invertSwipes: Boolean
         get() = prefs.getBoolean(KEY_INVERT, false)
         set(v) = prefs.edit { putBoolean(KEY_INVERT, v) }
@@ -59,5 +63,6 @@ class AirTouchSettings(context: Context) {
         const val KEY_FRONT_CAMERA = "front_camera"
         const val KEY_CURSOR = "cursor_mode"
         const val KEY_INVERT = "invert_swipes"
+        const val KEY_AIR_KEYBOARD = "air_keyboard"
     }
 }

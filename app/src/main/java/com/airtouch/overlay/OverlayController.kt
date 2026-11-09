@@ -17,7 +17,11 @@ import android.view.WindowManager
 import android.widget.TextView
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
+import android.graphics.Path
 import android.graphics.RectF
+import com.airtouch.keyboard.KeyCode
+import com.airtouch.keyboard.KeyboardLayout
+import com.airtouch.keyboard.Lang
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.SystemAction
 import com.airtouch.ui.ToggleActivity
@@ -44,6 +48,16 @@ class OverlayController(private val service: AccessibilityService) {
 
     private var trackerView: TrackerView? = null
     private var buttonView: TextView? = null
+    private var keyboardView: AirKeyboardView? = null
+    private val kbParams = WindowManager.LayoutParams(
+        0, 0,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+        PixelFormat.TRANSLUCENT,
+    ).apply { gravity = Gravity.TOP or Gravity.START }
     private lateinit var buttonParams: WindowManager.LayoutParams
 
     fun show() {
@@ -57,6 +71,8 @@ class OverlayController(private val service: AccessibilityService) {
         scope.cancel()
         trackerView?.let { runCatching { wm.removeView(it) } }
         buttonView?.let { runCatching { wm.removeView(it) } }
+        keyboardView?.let { runCatching { wm.removeView(it) } }
+        keyboardView = null
         trackerView = null
         buttonView = null
     }
@@ -72,6 +88,31 @@ class OverlayController(private val service: AccessibilityService) {
             },
         )
         trackerView?.update(status)
+        renderKeyboard(status)
+    }
+
+    /** Воздушная клавиатура — ровно поверх системной (её границы приходят из AirInputService). */
+    private fun renderKeyboard(s: AirTouchState.Status) {
+        val show = s.keyboardVisible && s.isRunning && s.kbRight > s.kbLeft && s.kbBottom > s.kbTop
+        if (!show) {
+            keyboardView?.let { runCatching { wm.removeView(it) } }
+            keyboardView = null
+            return
+        }
+        val w = s.kbRight - s.kbLeft
+        val h = s.kbBottom - s.kbTop
+        val changed = kbParams.x != s.kbLeft || kbParams.y != s.kbTop || kbParams.width != w || kbParams.height != h
+        kbParams.x = s.kbLeft
+        kbParams.y = s.kbTop
+        kbParams.width = w
+        kbParams.height = h
+        val view = keyboardView
+        if (view == null) {
+            keyboardView = AirKeyboardView(service).also { wm.addView(it, kbParams) }
+        } else if (changed) {
+            wm.updateViewLayout(view, kbParams)
+        }
+        keyboardView?.update(s)
     }
 
     private fun trackerParams() = WindowManager.LayoutParams(
@@ -235,6 +276,8 @@ private class TrackerView(context: Context) : View(context) {
         }
 
 
+        if (s.keyboardVisible) return // над клавиатурой свой курсор
+
         if (s.cursorVisible) {
             val cx = s.cursorX * width
             val cy = s.cursorY * height
@@ -279,5 +322,92 @@ private class TrackerView(context: Context) : View(context) {
     private companion object {
         const val FLASH_MS = 350L
         const val ACTION_FLASH_MS = 700L
+    }
+}
+
+/** Воздушная клавиатура: клавиши, подсветка клавиши под рукой, след росчерка, подсказки, курсор. */
+private class AirKeyboardView(context: Context) : View(context) {
+
+    private val d = resources.displayMetrics.density
+    private var status = AirTouchState.Status()
+
+    private val bg = Paint().apply { color = 0xF2121418.toInt() }
+    private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B3038.toInt() }
+    private val specialPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF1E2228.toInt() }
+    private val hoverPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
+    private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); textAlign = Paint.Align.CENTER }
+    private val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99FFFFFF.toInt(); textAlign = Paint.Align.CENTER }
+    private val sugg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt(); textAlign = Paint.Align.CENTER; isFakeBoldText = true }
+    private val divider = Paint().apply { color = 0x33FFFFFF; strokeWidth = 1 * d }
+    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 6 * d; strokeCap = Paint.Cap.ROUND; strokeJoin = Paint.Join.ROUND
+        color = 0xCC60A5FA.toInt()
+    }
+    private val cursorRing = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3 * d; color = 0xFFFFFFFF.toInt() }
+    private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x8860A5FA.toInt() }
+    private val cursorPressed = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF3B82F6.toInt() }
+    private val rect = RectF()
+    private val path = Path()
+
+    fun update(s: AirTouchState.Status) {
+        status = s
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        val s = status
+        val view = s.keyboard
+        val layout = KeyboardLayout.of(view?.lang ?: Lang.RU)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        canvas.drawRect(0f, 0f, w, h, bg)
+
+        val pad = 3 * d
+        val keyH = h / layout.rows
+        text.textSize = minOf(keyH * 0.42f, w / layout.cols * 0.6f)
+        sugg.textSize = text.textSize * 0.9f
+        hint.textSize = text.textSize * 0.7f
+
+        for (key in layout.keys) {
+            rect.set((key.cx - key.w / 2) * w + pad, (key.cy - key.h / 2) * h + pad, (key.cx + key.w / 2) * w - pad, (key.cy + key.h / 2) * h - pad)
+            val baseline = rect.centerY() + text.textSize * 0.35f
+            if (key.code == KeyCode.SUGGESTION) {
+                val word = view?.suggestions?.getOrNull(key.index)
+                if (word != null) {
+                    if (view?.hover == key) canvas.drawRoundRect(rect, 8 * d, 8 * d, hoverPaint)
+                    canvas.drawText(word, rect.centerX(), baseline, sugg)
+                } else if (key.index == 1) {
+                    canvas.drawText("🤏 щипок и веди по буквам", rect.centerX(), baseline, hint)
+                }
+                if (key.index > 0) canvas.drawLine(rect.left - pad, rect.top + pad, rect.left - pad, rect.bottom - pad, divider)
+                continue
+            }
+            val paint = when {
+                view?.hover == key -> hoverPaint
+                key.code == KeyCode.CHAR -> keyPaint
+                else -> specialPaint
+            }
+            canvas.drawRoundRect(rect, 8 * d, 8 * d, paint)
+            canvas.drawText(key.label, rect.centerX(), baseline, text)
+        }
+
+        val stroke = view?.stroke.orEmpty()
+        if (stroke.size >= 2) {
+            path.reset()
+            path.moveTo(stroke[0].first * w, stroke[0].second * h)
+            for (i in 1 until stroke.size) path.lineTo(stroke[i].first * w, stroke[i].second * h)
+            canvas.drawPath(path, strokePaint)
+        }
+
+        if (s.kbCursorVisible) {
+            val cx = s.kbCursorX * w
+            val cy = s.kbCursorY * h
+            if (s.kbPinching) {
+                canvas.drawCircle(cx, cy, 9 * d, cursorPressed)
+            } else {
+                canvas.drawCircle(cx, cy, 13 * d, cursorFill)
+            }
+            canvas.drawCircle(cx, cy, if (s.kbPinching) 9 * d else 13 * d, cursorRing)
+        }
     }
 }

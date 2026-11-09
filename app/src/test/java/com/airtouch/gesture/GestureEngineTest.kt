@@ -188,6 +188,22 @@ class GestureEngineTest {
         assertEquals("Up", kinds(sim.touches).last())
     }
 
+    // ---------- Воздушная клавиатура ----------
+
+    @Test
+    fun keyboardMode_noSwipesNoPoke_butPinchTypesAndVCloses() {
+        val sim = Sim().apply { engine.keyboardMode = true; x = 0.2f }
+            .hold(300, palm).move(0.8f, 0.5f, 250, palm).hold(300, palm)        // мах — не листает
+            .resize(0.20f, 165, palm).resize(0.15f, 200, palm).hold(300, palm)  // тык — не «домой»
+        assertEquals(emptyList<AirGesture>(), sim.swipes)
+        assertEquals(emptyList<SystemAction>(), sim.actions)
+        sim.hold(200, finger).hold(130, finger, pinch = true).hold(200, finger) // щипок — нажатие
+        assertEquals(listOf("Tap"), kinds(sim.touches))
+        assert(sim.engine.cursor != null)
+        sim.hold(800, vSign)                                                    // ✌️ — закрыть
+        assertEquals(listOf(SystemAction.BACK), sim.actions)
+    }
+
     @Test
     fun oneEuroFilter_smoothsJitterButFollowsMotion() {
         val f = OneEuroFilter()
