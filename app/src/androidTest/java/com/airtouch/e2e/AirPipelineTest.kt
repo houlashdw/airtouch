@@ -158,7 +158,7 @@ class AirPipelineTest {
 
     @Test
     fun pinchHeldStill_isLongPress() {
-        Hand(0.3f, 0.7f).hold(400).hold(1600, pinch = true).hold(300)
+        Hand(0.3f, 0.7f).hold(400).hold(2200, pinch = true).hold(300)
         Thread.sleep(500)
         assertTrue("long press expected", TestScreenActivity.longPresses.get() >= 1)
         assertEquals("no scroll", 0, scrollY())

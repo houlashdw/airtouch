@@ -19,24 +19,32 @@ data class Cursor(val x: Float, val y: Float, val pinching: Boolean)
 
 data class CursorConfig(
     /** Щипок: расстояние большой–указательный / длина ладони меньше этого… */
-    val pinchOn: Float = 0.38f,
+    val pinchOn: Float = 0.25f,
     /** …и отпускание — больше этого (гистерезис, чтобы не дребезжало). */
-    val pinchOff: Float = 0.55f,
+    val pinchOff: Float = 0.40f,
     /** Сколько кадров подряд нужно, чтобы поверить в смену щипка. */
-    val debounceFrames: Int = 2,
+    val debounceFrames: Int = 3,
+    /**
+     * Щипок засчитывается, только если перед ним пальцы были явно разведены (не дальше этого по времени).
+     * Расслабленная рука, где большой палец просто лежит у указательного, щипком не считается.
+     */
+    val openBeforeMs: Long = 700,
+    val openRatio: Float = 0.6f,
     /**
      * Щипок без движения дольше этого = палец «лёг» на экран (долгое нажатие).
      * Пока рука не двинулась и время не вышло, палец на экран НЕ кладём: иначе приложение
      * (YouTube и т.п.) успевает засчитать долгое нажатие, пока рука только собирается листать.
      */
-    val longPressMs: Long = 650,
+    val longPressMs: Long = 1200,
     /** Сдвиг курсора (доля экрана), после которого щипок становится перетаскиванием. */
     val dragStartDistance: Float = 0.03f,
     /** Какая часть кадра камеры растягивается на весь экран: не нужно тянуться к краям. */
-    val regionLeft: Float = 0.15f,
-    val regionRight: Float = 0.85f,
-    val regionTop: Float = 0.12f,
-    val regionBottom: Float = 0.72f,
+    val regionLeft: Float = 0.08f,
+    val regionRight: Float = 0.92f,
+    val regionTop: Float = 0.08f,
+    val regionBottom: Float = 0.80f,
+    /** Скачок курсора больше этого за кадр — сбой трекинга, кадр пропускаем. */
+    val maxJump: Float = 0.2f,
 )
 
 /**
@@ -52,8 +60,13 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     private enum class Touch { NONE, PENDING, DRAGGING }
 
     // Сглаживание сильнее, чем у махов: курсору важна точность, а не мгновенность.
-    private val fx = OneEuroFilter(minCutoff = 0.8f, beta = 3f)
-    private val fy = OneEuroFilter(minCutoff = 0.8f, beta = 3f)
+    private val fx = OneEuroFilter(minCutoff = 0.6f, beta = 2.5f)
+    private val fy = OneEuroFilter(minCutoff = 0.6f, beta = 2.5f)
+    private var lastOpenAt = Long.MIN_VALUE / 2
+    /** Щипок «из ниоткуда» (пальцы не разводили) — игнорируем до разжатия. */
+    private var ignoring = false
+    private var rawPrev: Pair<Float, Float>? = null
+    private var jumpFrames = 0
     /** Позиции курсора за последние ~300 мс — чтобы нажать туда, где курсор был ДО щипка. */
     private val trail = ArrayDeque<Triple<Long, Float, Float>>()
     private var pinched = false
@@ -67,7 +80,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         private set
 
     /** Пальцы сжаты или «палец на экране» — курсорный режим нельзя прерывать. */
-    val isTouching: Boolean get() = pinched || touch != Touch.NONE
+    val isTouching: Boolean get() = (pinched && !ignoring) || touch != Touch.NONE
 
     /** Сбросить всё. Если палец «лежал» на экране — вернёт Up, чтобы его отпустить. */
     fun reset(): TouchEvent? {
@@ -78,6 +91,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         fx.reset()
         fy.reset()
         trail.clear()
+        rawPrev = null
+        ignoring = false
         cursor = null
         return up
     }
@@ -87,6 +102,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         val t = frame.timestampMs
 
         val ratio = pinchRatio(frame)
+        if (ratio >= cfg.openRatio) lastOpenAt = t
         val wantPinched = if (pinched) ratio < cfg.pinchOff else ratio < cfg.pinchOn
         if (wantPinched != pinched) {
             if (++flipFrames >= cfg.debounceFrames) {
@@ -104,6 +120,14 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         val my = (lm[Lm.INDEX_MCP].y + lm[Lm.INDEX_PIP].y) / 2f
         val sx = ((mx - cfg.regionLeft) / (cfg.regionRight - cfg.regionLeft)).coerceIn(0f, 1f)
         val sy = ((my - cfg.regionTop) / (cfg.regionBottom - cfg.regionTop)).coerceIn(0f, 1f)
+        // Сбой трекинга: курсор «телепортировался» — не верим 1–2 кадрам.
+        val rp = rawPrev
+        if (rp != null && hypot(sx - rp.first, sy - rp.second) > cfg.maxJump && jumpFrames < 2) {
+            jumpFrames++
+            return null
+        }
+        jumpFrames = 0
+        rawPrev = sx to sy
         val x = fx.filter(sx, t)
         val y = fy.filter(sy, t)
         cursor = Cursor(x, y, pinched)
@@ -112,7 +136,9 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
 
         return when (touch) {
             Touch.NONE -> {
-                if (pinched) {
+                if (!pinched) ignoring = false
+                if (pinched && !ignoring && t - lastOpenAt > cfg.openBeforeMs) ignoring = true
+                if (pinched && !ignoring) {
                     touch = Touch.PENDING
                     downAt = t
                     // Сведение пальцев слегка тянет руку — берём точку ~120 мс назад.

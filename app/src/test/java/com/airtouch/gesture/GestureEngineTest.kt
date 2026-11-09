@@ -235,6 +235,19 @@ class GestureEngineTest {
     }
 
     @Test
+    fun pinchMode_relaxedHandWithThumbOnIndex_doesNothing() {
+        // Из видео: рука просто висит, большой палец лежит у указательного — это НЕ щипок.
+        val sim = pinchSim().hold(3000, finger, pinch = true).move(0.3f, 0.3f, 600, finger, pinch = true).hold(1500, finger, pinch = true)
+        assertEquals(emptyList<TouchEvent>(), sim.touches)
+    }
+
+    @Test
+    fun pinchMode_holdingPinchOneSecond_isNotLongPressYet() {
+        val sim = pinchSim().hold(300, finger).hold(1000, finger, pinch = true).hold(200, finger)
+        assertEquals(listOf("Tap"), kinds(sim.touches))
+    }
+
+    @Test
     fun pinchMode_slowTapStillTaps() {
         val sim = pinchSim().hold(300, finger).hold(450, finger, pinch = true).hold(200, finger)
         assertEquals(listOf("Tap"), kinds(sim.touches))
