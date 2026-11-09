@@ -1,0 +1,54 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test + build debug APK
+        run: |
+          chmod +x gradlew
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest :app:assembleDebug --stacktrace 2>&1 | tee build.log
+
+      # При ошибке кладём лог в ветку ci-logs, чтобы его можно было прочитать через git
+      - name: Publish build log on failure
+        if: failure()
+        run: |
+          git config user.name "ci"
+          git config user.email "ci@users.noreply.github.com"
+          tail -c 300000 build.log > /tmp/LAST_BUILD_LOG.txt || echo "no log" > /tmp/LAST_BUILD_LOG.txt
+          git checkout --orphan ci-logs
+          git rm -rf --cached . > /dev/null
+          cp /tmp/LAST_BUILD_LOG.txt LAST_BUILD_LOG.txt
+          git add LAST_BUILD_LOG.txt
+          git commit -m "build log ${{ github.sha }}"
+          git push -f origin ci-logs
+
+      - name: Prepare APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk AirTouch.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: AirTouch build ${{ github.run_number }}
+          body: "Скачайте AirTouch.apk на телефон и установите."
+          files: AirTouch.apk
+          make_latest: true

@@ -1,0 +1,11 @@
+*.iml
+.gradle/
+/local.properties
+.idea/
+.DS_Store
+build/
+/captures
+.externalNativeBuild
+.cxx
+# Модель скачивается при сборке
+app/src/main/assets/hand_landmarker.task
