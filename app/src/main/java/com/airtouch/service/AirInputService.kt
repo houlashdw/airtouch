@@ -43,6 +43,23 @@ class AirInputService : AccessibilityService() {
     private var overlay: OverlayController? = null
     /** Начало росчерка щипком (доли экрана) и было ли это намеренное удержание. */
     private var stroke: Triple<Float, Float, Boolean>? = null
+    private val trail = ArrayList<Triple<Float, Float, Long>>()
+
+    /** Весь путь щипка одним жестом с настоящей скоростью — для набора росчерком (Gboard и т.п.). */
+    private fun replayTrail() {
+        if (trail.size < 2) return
+        val pts = trail.map { toScreen(it.first, it.second) }
+        val path = Path().apply {
+            moveTo(pts[0].x, pts[0].y)
+            for (i in 1 until pts.size) if (pts[i] != pts[i - 1]) lineTo(pts[i].x, pts[i].y)
+        }
+        val duration = (trail.last().third - trail.first().third).coerceIn(150L, 4000L)
+        markInjecting()
+        dispatchGesture(
+            GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build(),
+            null, null,
+        )
+    }
     private lateinit var settings: AirTouchSettings
 
     /** Поле ввода, где стоит курсор, — сюда печатает воздушная клавиатура. */
@@ -66,22 +83,26 @@ class AirInputService : AccessibilityService() {
 
     /** Открыта системная клавиатура → показываем поверх неё воздушную, в тех же границах. */
     private fun updateKeyboardState() {
-        val ime = if (::settings.isInitialized && settings.airKeyboard) {
-            try {
-                windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
-            } catch (e: Exception) {
-                null
-            }
-        } else null
+        val ime = try {
+            windows.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        } catch (e: Exception) {
+            null
+        }
         val r = Rect()
         ime?.getBoundsInScreen(r)
-        val visible = ime != null && r.width() > 0 && r.height() > 0
+        val imeVisible = ime != null && r.width() > 0 && r.height() > 0
+        val air = imeVisible && ::settings.isInitialized && settings.airKeyboard
+        val screenH = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds.height().coerceAtLeast(1)
+        val topFrac = if (imeVisible) r.top.toFloat() / screenH else 2f
         val s = AirTouchState.status.value
-        if (s.keyboardVisible == visible && s.kbLeft == r.left && s.kbTop == r.top &&
+        if (s.keyboardVisible == air && s.imeTopFrac == topFrac && s.kbLeft == r.left && s.kbTop == r.top &&
             s.kbRight == r.right && s.kbBottom == r.bottom
         ) return
         AirTouchState.update {
-            it.copy(keyboardVisible = visible, kbLeft = r.left, kbTop = r.top, kbRight = r.right, kbBottom = r.bottom)
+            it.copy(
+                keyboardVisible = air, imeTopFrac = topFrac,
+                kbLeft = r.left, kbTop = r.top, kbRight = r.right, kbBottom = r.bottom,
+            )
         }
     }
 
@@ -127,12 +148,23 @@ class AirInputService : AccessibilityService() {
             val p = toScreen(event.x, event.y)
             when (event) {
                 is TouchEvent.Tap -> tap(p)
-                is TouchEvent.Down -> stroke = Triple(event.x, event.y, event.longPress)
-                is TouchEvent.Move -> Unit // палец не лежит на экране — только запоминаем начало
+                is TouchEvent.Down -> {
+                    stroke = Triple(event.x, event.y, event.longPress)
+                    trail.clear(); trail += Triple(event.x, event.y, android.os.SystemClock.uptimeMillis())
+                }
+                is TouchEvent.Move -> trail += Triple(event.x, event.y, android.os.SystemClock.uptimeMillis())
                 is TouchEvent.Up -> {
                     val s0 = stroke
                     stroke = null
-                    if (s0 != null) play(StrokeSynth.decide(s0.first, s0.second, event.x, event.y, s0.third))
+                    trail += Triple(event.x, event.y, android.os.SystemClock.uptimeMillis())
+                    if (s0 == null) return@post
+                    val imeTop = AirTouchState.status.value.imeTopFrac
+                    if (imeTop <= 1f && s0.second >= imeTop && !s0.third) {
+                        // Росчерк по обычной клавиатуре — передаём весь путь, слово распознаёт сама клавиатура.
+                        replayTrail()
+                    } else {
+                        play(StrokeSynth.decide(s0.first, s0.second, event.x, event.y, s0.third))
+                    }
                 }
             }
         }

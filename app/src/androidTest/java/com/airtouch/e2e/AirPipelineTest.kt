@@ -215,6 +215,25 @@ class AirPipelineTest {
     }
 
     @Test
+    fun pinchTap_onSystemKeyboard_typesLetter() {
+        scenario.onActivity {
+            it.edit.requestFocus()
+            it.getSystemService(InputMethodManager::class.java).showSoftInput(it.edit, InputMethodManager.SHOW_IMPLICIT)
+        }
+        val deadline = SystemClock.uptimeMillis() + 8000
+        while (AirTouchState.status.value.imeTopFrac > 1f && SystemClock.uptimeMillis() < deadline) Thread.sleep(200)
+        val top = AirTouchState.status.value.imeTopFrac
+        assertTrue("system keyboard should open, imeTop=$top", top <= 1f)
+        Thread.sleep(500)
+        // Середина клавиатуры по высоте — ряд букв.
+        Hand(0.45f, top + (1f - top) * 0.45f).hold(400).hold(130, pinch = true).hold(300)
+        Thread.sleep(800)
+        var text = ""
+        scenario.onActivity { text = it.edit.text.toString() }
+        assertTrue("a key press should type something, text='$text'", text.isNotEmpty())
+    }
+
+    @Test
     fun backAction_closesScreen() {
         service.system(SystemAction.BACK)
         val deadline = SystemClock.uptimeMillis() + 5000

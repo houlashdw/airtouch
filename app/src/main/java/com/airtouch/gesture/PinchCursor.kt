@@ -61,6 +61,9 @@ data class CursorConfig(
     val verticalGain: Float = 0.55f,
     /** Микродвижения меньше этой доли ладони за кадр — дрожание, курсор стоит. */
     val deadZonePalm: Float = 0.015f,
+    /** Ниже этой линии экрана (открыта обычная клавиатура) курсор медленнее — чтобы попадать в клавиши. */
+    val precisionTop: Float = 2f,
+    val precisionGain: Float = 0.55f,
     /** Рука сдвинулась больше этого за ~250 мс до щипка — нажатия не будет (курсор ехал, щипок случайный). */
     val stillForTap: Float = 0.04f,
 )
@@ -174,7 +177,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                 if (dist > 1.5f || dist < cfg.deadZonePalm) { dx = 0f; dy = 0f } // сбой трекинга / дрожание
                 val dt = (t - relPrevT).coerceAtLeast(1L) / 1000f
                 val k = ((dist / dt) / cfg.fastSpeed).coerceIn(0f, 1f)
-                val gain = cfg.gainSlow + (cfg.gainFast - cfg.gainSlow) * k
+                val gain = (cfg.gainSlow + (cfg.gainFast - cfg.gainSlow) * k) *
+                    if (relY >= cfg.precisionTop) cfg.precisionGain else 1f
                 relX = (relX + dx * gain).coerceIn(0f, 1f)
                 relY = (relY + dy * gain * cfg.verticalGain).coerceIn(0f, 1f)
             }

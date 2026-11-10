@@ -145,6 +145,8 @@ class GestureCameraService : LifecycleService() {
     private var frameCounter = 0L   // только cameraExecutor
     private var lastTimestamp = 0L  // только cameraExecutor
 
+    private val settingsDockEnterY = com.airtouch.gesture.EngineConfig().dockEnterY
+
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         engine.config = settings.engineConfig()
         invertSwipes = settings.invertSwipes
@@ -446,6 +448,15 @@ class GestureCameraService : LifecycleService() {
 
         // Открыта системная клавиатура → рука печатает на воздушной.
         val kbOn = AirTouchState.status.value.keyboardVisible && input != null
+        // Открыта обычная клавиатура: точнее курсор над ней, панель ◁ ○ ▢ не выезжает (там пробел).
+        val imeTop = AirTouchState.status.value.imeTopFrac
+        val ec = engine.config
+        if (ec.cursor.precisionTop != imeTop) {
+            engine.config = ec.copy(
+                cursor = ec.cursor.copy(precisionTop = imeTop),
+                dockEnterY = if (imeTop <= 1f) 2f else settingsDockEnterY,
+            )
+        }
         if (engine.keyboardMode != kbOn) {
             engine.keyboardMode = kbOn
             if (!kbOn) keyboard?.reset()

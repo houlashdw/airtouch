@@ -273,6 +273,23 @@ class GestureEngineTest {
         assert(kotlin.math.abs(sim.engine.cursor!!.x - kept) < 0.02f) { "cursor jumped: $kept -> ${sim.engine.cursor}" }
     }
 
+    @Test
+    fun trackpadCursor_isSlowerOverSystemKeyboard() {
+        fun shift(precisionTop: Float): Float {
+            val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0, cursor = CursorConfig(precisionTop = precisionTop)))
+            var t = 0L
+            var x = 0.4f
+            repeat(10) { t += 33; e.process(HandFrame(t, syntheticHand(x, 0.5f, finger))) }
+            val before = e.cursor!!.x
+            repeat(9) { t += 33; x += 0.006f; e.process(HandFrame(t, syntheticHand(x, 0.5f, finger))) }
+            repeat(6) { t += 33; e.process(HandFrame(t, syntheticHand(x, 0.5f, finger))) }
+            return e.cursor!!.x - before
+        }
+        val normal = shift(2f)
+        val overKeyboard = shift(0f) // вся область — «над клавиатурой»
+        assert(overKeyboard < normal * 0.7f && overKeyboard > 0f) { "normal=$normal kb=$overKeyboard" }
+    }
+
     // ---------- «Я просто пользуюсь телефоном» ----------
 
     @Test

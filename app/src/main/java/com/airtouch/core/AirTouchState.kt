@@ -50,6 +50,8 @@ object AirTouchState {
         val fps: Int = 0,
         /** Системная клавиатура открыта — поверх неё рисуем воздушную. Прямоугольник — в пикселях экрана. */
         val keyboardVisible: Boolean = false,
+        /** Верх обычной (системной) клавиатуры в долях экрана; 2 — клавиатура закрыта. */
+        val imeTopFrac: Float = 2f,
         val kbLeft: Int = 0,
         val kbTop: Int = 0,
         val kbRight: Int = 0,
