@@ -95,6 +95,16 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     private var relPrev: Pair<Float, Float>? = null
     private var relPrevT = 0L
     private var lastRaw: Pair<Float, Float>? = null
+    /** «Виртуальный» курсор без упора в края — по нему считаем росчерк (у края экрана курсор стоит, а рука идёт). */
+    private var virtX = 0.5f
+    private var virtY = 0.5f
+    private var virtAtDownX = 0f
+    private var virtAtDownY = 0f
+    private val vtrail = ArrayDeque<Triple<Long, Float, Float>>()
+    /** Насколько рука «додавила» курсор вниз, когда он уже упёрся в нижний край (доли экрана). */
+    private var lastDrag: Pair<Float, Float>? = null
+    var bottomPush = 0f
+        private set
     private var accX = 0f
     private var accY = 0f
     /** Позиции курсора за последние ~300 мс — чтобы нажать туда, где курсор был ДО щипка. */
@@ -114,13 +124,16 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
 
     /** Сбросить всё. Если палец «лежал» на экране — вернёт Up, чтобы его отпустить. */
     fun reset(): TouchEvent? {
-        val up = if (touch == Touch.DRAGGING) cursor?.let { TouchEvent.Up(it.x, it.y) } else null
+        // Рука пропала посреди росчерка (вылетела за кадр) — отпускаем там, куда росчерк дошёл.
+        val up = if (touch == Touch.DRAGGING) lastDrag?.let { TouchEvent.Up(it.first, it.second) } else null
+        lastDrag = null
         touch = Touch.NONE
         pinched = false
         flipFrames = 0
         fx.reset()
         fy.reset()
         trail.clear()
+        vtrail.clear()
         rawPrev = null
         relPrev = null
         lastRaw = null
@@ -181,6 +194,10 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     if (relY >= cfg.precisionTop) cfg.precisionGain else 1f
                 relX = (relX + dx * gain).coerceIn(0f, 1f)
                 relY = (relY + dy * gain * cfg.verticalGain).coerceIn(0f, 1f)
+                virtX += dx * gain
+                virtY += dy * gain * cfg.verticalGain
+                if (relY >= 0.999f && dy > 0) bottomPush += dy * gain * cfg.verticalGain
+                else if (relY < 0.98f) bottomPush = 0f
             }
             relPrev = fxv to fyv
             relPrevT = t
@@ -201,6 +218,9 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
             y = fy.filter(sy, t)
         }
         cursor = Cursor(x, y, pinched)
+        if (!cfg.relative) { virtX = x; virtY = y }
+        vtrail.addLast(Triple(t, virtX, virtY))
+        while (vtrail.isNotEmpty() && t - vtrail.first().first > 300) vtrail.removeFirst()
         trail.addLast(Triple(t, x, y))
         while (trail.isNotEmpty() && t - trail.first().first > 300) trail.removeFirst()
 
@@ -215,7 +235,10 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     val before = trail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: trail.first()
                     downX = before.second
                     downY = before.third
-                    movingAtPinch = trail.filter { t - it.first <= 250 }.any { hypot(it.second - x, it.third - y) > cfg.stillForTap }
+                    movingAtPinch = vtrail.filter { t - it.first <= 250 }.any { hypot(it.second - virtX, it.third - virtY) > cfg.stillForTap }
+                    val vb = vtrail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: vtrail.first()
+                    virtAtDownX = vb.second
+                    virtAtDownY = vb.third
                 }
                 null
             }
@@ -224,21 +247,30 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     touch = Touch.NONE
                     if (movingAtPinch) null else TouchEvent.Tap(downX, downY)
                 }
-                hypot(x - downX, y - downY) > cfg.dragStartDistance -> {
+                hypot(virtX - virtAtDownX, virtY - virtAtDownY) > cfg.dragStartDistance -> {
+                    lastDrag = downX to downY
                     touch = Touch.DRAGGING
                     TouchEvent.Down(downX, downY)
                 }
                 t - downAt > cfg.longPressMs && !movingAtPinch -> {
+                    lastDrag = downX to downY
                     touch = Touch.DRAGGING
                     TouchEvent.Down(downX, downY, longPress = true)
                 }
                 else -> null
             }
-            Touch.DRAGGING -> if (!pinched) {
-                touch = Touch.NONE
-                TouchEvent.Up(x, y)
-            } else {
-                TouchEvent.Move(x, y)
+            // Путь росчерка — от точки щипка на сдвиг «виртуального» курсора (может выходить за экран:
+            // упёрлись в край, а рука продолжает — росчерк всё равно засчитается).
+            Touch.DRAGGING -> {
+                val ex = downX + (virtX - virtAtDownX)
+                val ey = downY + (virtY - virtAtDownY)
+                lastDrag = ex to ey
+                if (!pinched) {
+                    touch = Touch.NONE
+                    TouchEvent.Up(ex, ey)
+                } else {
+                    TouchEvent.Move(ex, ey)
+                }
             }
         }
     }

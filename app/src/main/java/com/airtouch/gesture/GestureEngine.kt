@@ -22,6 +22,11 @@ data class EngineConfig(
     /** Курсор у самого низа экрана столько — выезжает панель кнопок. */
     val dockEnterY: Float = 0.97f,
     val dockDwellMs: Long = 300,
+    /**
+     * Панель выезжает, только если курсор упёрся в низ И рука продолжила вести вниз ещё на столько
+     * (доли экрана). Просто задержаться курсором внизу при листании — мало.
+     */
+    val dockPush: Float = 0.25f,
     /** Курсор поднялся выше — панель прячется. */
     val dockExitY: Float = 0.78f,
     /** Верхняя граница панели (доля экрана). */
@@ -239,7 +244,8 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         // Панель кнопок: курсор «упёрся» в низ и задержался. Во время перетаскивания не показываем.
         if (c != null) {
             if (!dockVisible) {
-                if (c.y >= cfg.dockEnterY && !pointer.isTouching) {
+                val pushed = if (cfg.cursor.relative) pointer.bottomPush >= cfg.dockPush else true
+                if (c.y >= cfg.dockEnterY && pushed && !pointer.isTouching) {
                     val since = dockSince ?: t.also { dockSince = it }
                     if (t - since >= cfg.dockDwellMs) dockVisible = true
                 } else {

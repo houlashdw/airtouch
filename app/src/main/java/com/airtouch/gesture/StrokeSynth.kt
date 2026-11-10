@@ -27,7 +27,9 @@ object StrokeSynth {
         val d = hypot(dx, dy)
         if (d < MIN_FLICK) return if (longPress) Synth.LongPress(x0, y0) else Synth.Nothing
         // Почти вертикально/горизонтально — выпрямляем: чище для лент и каруселей.
-        if (abs(dy) > 2 * abs(dx)) dx = 0f else if (abs(dx) > 2 * abs(dy)) dy = 0f
+        // Ленты листают вертикально — косой мах вверх/вниз не должен становиться горизонтальным
+        // (переключать вкладки). Горизонталь — только явно горизонтальный мах.
+        if (abs(dx) > 1.8f * abs(dy)) dy = 0f else if (abs(dy) > 0.6f * abs(dx)) dx = 0f
         val len = hypot(dx, dy)
         val scale = maxOf(d, MIN_LENGTH) / len
         var ex = x0 + dx * scale

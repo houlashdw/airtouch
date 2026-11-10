@@ -23,6 +23,12 @@ class StrokeSynthTest {
     }
 
     @Test
+    fun diagonalUpFlick_staysVertical_notTabSwitch() {
+        val f = StrokeSynth.decide(0.5f, 0.7f, 0.62f, 0.55f, longPress = false) as Synth.Flick // dx=0.12, dy=-0.15
+        assert(f.x0 == f.x1) { "must be vertical: $f" }
+    }
+
+    @Test
     fun flickStaysOnScreen() {
         val f = StrokeSynth.decide(0.5f, 0.15f, 0.5f, 0.02f, longPress = false) as Synth.Flick
         assert(f.y1 >= 0.05f && f.y0 <= 0.88f) { "$f" }

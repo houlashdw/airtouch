@@ -274,6 +274,29 @@ class GestureEngineTest {
     }
 
     @Test
+    fun cursorRestingNearBottom_doesNotOpenDock() {
+        // Листали и курсор просто оказался внизу — панель не должна выезжать.
+        val sim = pinchSim().hold(200, finger)
+        var y = 0.5f
+        var dock = false
+        while (sim.engine.cursor!!.y < 0.97f) { sim.t += 33; y += 0.004f; dock = dock || sim.engine.process(HandFrame(sim.t, syntheticHand(0.5f, y, finger))).dock }
+        repeat(30) { sim.t += 33; dock = dock || sim.engine.process(HandFrame(sim.t, syntheticHand(0.5f, y, finger))).dock }
+        assert(!dock) { "cursor just rests at the bottom" }
+    }
+
+    @Test
+    fun flickAtScreenEdge_isStillAFlick_notATap() {
+        // Курсор упёрся в верх экрана, а рука делает мах вверх щипком — раньше это было «нажатие» (пауза видео).
+        val sim = pinchSim().hold(200, finger).move(0.5f, 0.2f, 400, finger).hold(300, finger) // курсор у верхнего края
+        assert(sim.engine.cursor!!.y < 0.02f)
+        sim.hold(100, finger, pinch = true).move(0.5f, 0.1f, 200, finger, pinch = true).hold(200, finger)
+        val k = kinds(sim.touches)
+        assertEquals(listOf("Down", "Up"), k.filter { it != "Move" })
+        val up = sim.touches.last() as TouchEvent.Up
+        assert(up.y < -0.05f) { "virtual end must go past the edge: $up" }
+    }
+
+    @Test
     fun trackpadCursor_isSlowerOverSystemKeyboard() {
         fun shift(precisionTop: Float): Float {
             val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0, cursor = CursorConfig(precisionTop = precisionTop)))

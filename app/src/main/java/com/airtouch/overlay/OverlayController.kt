@@ -160,8 +160,9 @@ class OverlayController(private val service: AccessibilityService) {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = bounds.width() - size - (4 * density).toInt()
-            y = (bounds.height() * 0.35f).toInt()
+            // Полкнопки за левым краем — не перекрывает кнопки приложений (лайк, комментарии справа).
+            x = -size / 2
+            y = (bounds.height() * 0.22f).toInt()
         }
         return TextView(service).apply {
             text = ""
