@@ -32,6 +32,8 @@ object AirTouchState {
         val palmX: Float = 0.5f,
         val palmY: Float = 0.5f,
         val lowLight: Boolean = false,
+        /** Подсвечивать руку светлой рамкой экрана в темноте. */
+        val screenLight: Boolean = true,
         /** Что сейчас видит камера — для подсказки в приложении. */
         val pose: HandPose? = null,
         /** Курсор (режим курсора), доли экрана. */
@@ -86,6 +88,9 @@ object Timeouts {
     const val LUMA_EVERY_N_FRAMES = 15L
     /** Средняя яркость 0..255, ниже которой предупреждаем о слабом свете. */
     const val LOW_LIGHT_LUMA = 45f
+    /** Ниже этой яркости кадр осветляется перед распознаванием (до ×4). */
+    const val BRIGHTEN_BELOW_LUMA = 90f
+    const val BRIGHTEN_TARGET_LUMA = 110f
 }
 
 /**

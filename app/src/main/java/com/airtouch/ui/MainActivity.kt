@@ -346,6 +346,7 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
     var cursor by remember { mutableStateOf(settings.cursorEnabled) }
     var invert by remember { mutableStateOf(settings.invertSwipes) }
     var airKeyboard by remember { mutableStateOf(settings.airKeyboard) }
+    var screenLight by remember { mutableStateOf(settings.screenLight) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -357,6 +358,12 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
                     "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
+
+            SwitchRow(
+                title = "Подсветка экраном в темноте",
+                subtitle = "Светлая рамка по краям экрана освещает руку, когда темно. Кадр с камеры при этом ещё и осветляется программно.",
+                checked = screenLight,
+            ) { screenLight = it; settings.screenLight = it }
 
             SwitchRow(
                 title = "Воздушная клавиатура",

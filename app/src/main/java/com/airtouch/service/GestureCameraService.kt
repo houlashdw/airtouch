@@ -77,6 +77,19 @@ class GestureCameraService : LifecycleService() {
 
     @Volatile private var tracker: HandTracker? = null
     private var cameraProvider: ProcessCameraProvider? = null
+    private var camera: androidx.camera.core.Camera? = null
+    @Volatile private var lastLuma = 128f
+    private var exposureBoosted = false
+
+    /** В темноте — максимальная экспокоррекция камеры, при нормальном свете — обратно 0. */
+    private fun updateExposure(dark: Boolean) {
+        if (dark == exposureBoosted) return
+        val cam = camera ?: return
+        val range = cam.cameraInfo.exposureState.exposureCompensationRange
+        if (!cam.cameraInfo.exposureState.isExposureCompensationSupported) return
+        exposureBoosted = dark
+        cam.cameraControl.setExposureCompensationIndex(if (dark) range.upper else 0)
+    }
     private var watchdog: Job? = null
 
     @Volatile private var mirror = true
@@ -95,6 +108,7 @@ class GestureCameraService : LifecycleService() {
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         engine.config = settings.engineConfig()
         invertSwipes = settings.invertSwipes
+        AirTouchState.update { it.copy(screenLight = settings.screenLight) }
         if (key == AirTouchSettings.KEY_FRONT_CAMERA && !paused) bindCamera()
     }
 
@@ -191,7 +205,7 @@ class GestureCameraService : LifecycleService() {
         paused = false
         economy = false
         handVisible = false
-        AirTouchState.update { AirTouchState.Status(mode = Mode.ACTIVE) }
+        AirTouchState.update { AirTouchState.Status(mode = Mode.ACTIVE, screenLight = settings.screenLight) }
 
         bindCamera()
         startWatchdog()
@@ -208,6 +222,8 @@ class GestureCameraService : LifecycleService() {
         AirInputService.instance?.cancelTouch()
         cameraProvider?.unbindAll()
         cameraProvider = null
+        camera = null
+        exposureBoosted = false
         tracker?.let { t -> cameraExecutor.execute { t.close() } } // после уже поставленных кадров
         tracker = null
         isRunning = false
@@ -315,7 +331,7 @@ class GestureCameraService : LifecycleService() {
 
             try {
                 provider.unbindAll()
-                provider.bindToLifecycle(this, selector, analysis)
+                camera = provider.bindToLifecycle(this, selector, analysis)
             } catch (e: Exception) {
                 fail("Не удалось открыть ${if (front) "фронтальную" else "основную"} камеру: ${e.message}", e)
             }
@@ -328,16 +344,22 @@ class GestureCameraService : LifecycleService() {
             frameCounter++
             if (economy && frameCounter % Timeouts.ECONOMY_FRAME_STRIDE != 0L) return
 
-            val bitmap = FrameUtils.toUprightBitmap(image, mirror)
+            val raw = FrameUtils.toUprightBitmap(image, mirror)
 
             if (frameCounter % Timeouts.LUMA_EVERY_N_FRAMES == 0L) {
-                val low = FrameUtils.meanLuma(bitmap) < Timeouts.LOW_LIGHT_LUMA
+                lastLuma = FrameUtils.meanLuma(raw)
+                val dark = lastLuma < Timeouts.BRIGHTEN_BELOW_LUMA
+                ContextCompat.getMainExecutor(this).execute { updateExposure(dark) }
+                val low = lastLuma < Timeouts.LOW_LIGHT_LUMA
                 if (low != AirTouchState.status.value.lowLight) AirTouchState.update { s -> s.copy(lowLight = low) }
             }
 
             val ts = maxOf(SystemClock.uptimeMillis(), lastTimestamp + 1)
             lastTimestamp = ts
-            t.detect(bitmap, ts)
+            val gain = if (lastLuma < Timeouts.BRIGHTEN_BELOW_LUMA) {
+                (Timeouts.BRIGHTEN_TARGET_LUMA / lastLuma.coerceAtLeast(10f)).coerceIn(1f, 4f)
+            } else 1f
+            t.detect(FrameUtils.brighten(raw, gain), ts)
         }
     }
 

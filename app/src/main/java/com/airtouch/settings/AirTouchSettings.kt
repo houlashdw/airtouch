@@ -42,6 +42,10 @@ class AirTouchSettings(context: Context) {
         get() = if (prefs.getString(KEY_MODE, null) == ControlMode.GESTURES.name) ControlMode.GESTURES else ControlMode.PINCH
         set(v) = prefs.edit { putString(KEY_MODE, v.name) }
 
+    var screenLight: Boolean
+        get() = prefs.getBoolean(KEY_SCREEN_LIGHT, true)
+        set(v) = prefs.edit { putBoolean(KEY_SCREEN_LIGHT, v) }
+
     var airKeyboard: Boolean
         get() = prefs.getBoolean(KEY_AIR_KEYBOARD, true)
         set(v) = prefs.edit { putBoolean(KEY_AIR_KEYBOARD, v) }
@@ -71,5 +75,6 @@ class AirTouchSettings(context: Context) {
         const val KEY_INVERT = "invert_swipes"
         const val KEY_AIR_KEYBOARD = "air_keyboard"
         const val KEY_MODE = "control_mode"
+        const val KEY_SCREEN_LIGHT = "screen_light"
     }
 }

@@ -23,6 +23,27 @@ object FrameUtils {
         return Bitmap.createBitmap(src, 0, 0, src.width, src.height, m, false)
     }
 
+    /**
+     * Осветление тёмного кадра перед распознаванием: усиление + подъём теней.
+     * MediaPipe ищет руку по контрасту; в полутьме он есть, но «утоплен» в чёрном.
+     */
+    fun brighten(src: Bitmap, gain: Float): Bitmap {
+        if (gain <= 1.05f) return src
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val lift = 12f * (gain - 1f).coerceAtMost(3f)
+        val cm = android.graphics.ColorMatrix(
+            floatArrayOf(
+                gain, 0f, 0f, 0f, lift,
+                0f, gain, 0f, 0f, lift,
+                0f, 0f, gain, 0f, lift,
+                0f, 0f, 0f, 1f, 0f,
+            ),
+        )
+        val paint = android.graphics.Paint().apply { colorFilter = android.graphics.ColorMatrixColorFilter(cm) }
+        android.graphics.Canvas(out).drawBitmap(src, 0f, 0f, paint)
+        return out
+    }
+
     /** Средняя яркость 0..255 по сетке grid×grid точек — дёшево, раз в несколько кадров. */
     fun meanLuma(bitmap: Bitmap, grid: Int = 24): Float {
         var sum = 0f

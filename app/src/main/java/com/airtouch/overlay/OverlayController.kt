@@ -253,6 +253,7 @@ private class TrackerView(context: Context) : View(context) {
         setShadowLayer(6 * d, 0f, 0f, 0xCC000000.toInt())
     }
     private val arcRect = RectF()
+    private val glow = Paint().apply { color = 0xE6FFF6E0.toInt() }
     private val dockBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xE6121418.toInt() }
     private val dockBtn = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2B3038.toInt() }
     private val dockHover = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
@@ -275,6 +276,15 @@ private class TrackerView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         val s = status
+
+        // Темно — светлая рамка по краям экрана подсвечивает руку (как вспышка для селфи).
+        if (s.isRunning && s.lowLight && s.screenLight && !s.keyboardVisible) {
+            val w = 36 * d
+            canvas.drawRect(0f, 0f, width.toFloat(), w, glow)
+            canvas.drawRect(0f, height - w, width.toFloat(), height.toFloat(), glow)
+            canvas.drawRect(0f, 0f, w, height.toFloat(), glow)
+            canvas.drawRect(width - w, 0f, width.toFloat(), height.toFloat(), glow)
+        }
 
         if (s.isRunning && s.lowLight) {
             val text = "Мало света — жесты распознаются хуже"
