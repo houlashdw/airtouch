@@ -10,7 +10,8 @@ sealed interface TouchEvent {
     val y: Float
 
     data class Tap(override val x: Float, override val y: Float) : TouchEvent
-    data class Down(override val x: Float, override val y: Float) : TouchEvent
+    /** [longPress] — палец «лёг» по таймеру удержания (а не потому, что рука пошла). */
+    data class Down(override val x: Float, override val y: Float, val longPress: Boolean = false) : TouchEvent
     data class Move(override val x: Float, override val y: Float) : TouchEvent
     data class Up(override val x: Float, override val y: Float) : TouchEvent
 }
@@ -45,6 +46,8 @@ data class CursorConfig(
     val regionBottom: Float = 0.80f,
     /** Скачок курсора больше этого за кадр — сбой трекинга, кадр пропускаем. */
     val maxJump: Float = 0.2f,
+    /** Рука сдвинулась больше этого за ~250 мс до щипка — нажатия не будет (курсор ехал, щипок случайный). */
+    val stillForTap: Float = 0.04f,
 )
 
 /**
@@ -67,6 +70,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     private var ignoring = false
     private var rawPrev: Pair<Float, Float>? = null
     private var jumpFrames = 0
+    private var movingAtPinch = false
     /** Позиции курсора за последние ~300 мс — чтобы нажать туда, где курсор был ДО щипка. */
     private val trail = ArrayDeque<Triple<Long, Float, Float>>()
     private var pinched = false
@@ -145,18 +149,22 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     val before = trail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: trail.first()
                     downX = before.second
                     downY = before.third
+                    movingAtPinch = trail.filter { t - it.first <= 250 }.any { hypot(it.second - x, it.third - y) > cfg.stillForTap }
                 }
                 null
             }
             Touch.PENDING -> when {
                 !pinched -> {
                     touch = Touch.NONE
-                    TouchEvent.Tap(downX, downY)
+                    if (movingAtPinch) null else TouchEvent.Tap(downX, downY)
                 }
-                // Рука пошла — кладём палец и сразу ведём: приложение видит прокрутку, а не удержание.
-                hypot(x - downX, y - downY) > cfg.dragStartDistance || t - downAt > cfg.longPressMs -> {
+                hypot(x - downX, y - downY) > cfg.dragStartDistance -> {
                     touch = Touch.DRAGGING
                     TouchEvent.Down(downX, downY)
+                }
+                t - downAt > cfg.longPressMs && !movingAtPinch -> {
+                    touch = Touch.DRAGGING
+                    TouchEvent.Down(downX, downY, longPress = true)
                 }
                 else -> null
             }

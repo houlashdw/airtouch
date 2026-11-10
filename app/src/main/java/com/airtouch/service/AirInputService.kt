@@ -21,6 +21,8 @@ import com.airtouch.core.AirTouchState
 import com.airtouch.keyboard.TextSink
 import com.airtouch.settings.AirTouchSettings
 import com.airtouch.gesture.AirGesture
+import com.airtouch.gesture.StrokeSynth
+import com.airtouch.gesture.Synth
 import com.airtouch.gesture.SystemAction
 import com.airtouch.gesture.TouchEvent
 import com.airtouch.overlay.OverlayController
@@ -39,7 +41,8 @@ class AirInputService : AccessibilityService() {
 
     private val main = Handler(Looper.getMainLooper())
     private var overlay: OverlayController? = null
-    private var drag: TouchSession? = null
+    /** Начало росчерка щипком (доли экрана) и было ли это намеренное удержание. */
+    private var stroke: Triple<Float, Float, Boolean>? = null
     private lateinit var settings: AirTouchSettings
 
     /** Поле ввода, где стоит курсор, — сюда печатает воздушная клавиатура. */
@@ -95,8 +98,7 @@ class AirInputService : AccessibilityService() {
     }
 
     private fun teardown() {
-        drag?.end(null)
-        drag = null
+        stroke = null
 
         overlay?.hide()
         overlay = null
@@ -125,14 +127,12 @@ class AirInputService : AccessibilityService() {
             val p = toScreen(event.x, event.y)
             when (event) {
                 is TouchEvent.Tap -> tap(p)
-                is TouchEvent.Down -> {
-                    drag?.end(null)
-                    drag = TouchSession(listOf(p)).also { it.begin() }
-                }
-                is TouchEvent.Move -> drag?.moveTo(listOf(p))
+                is TouchEvent.Down -> stroke = Triple(event.x, event.y, event.longPress)
+                is TouchEvent.Move -> Unit // палец не лежит на экране — только запоминаем начало
                 is TouchEvent.Up -> {
-                    drag?.end(listOf(p))
-                    drag = null
+                    val s0 = stroke
+                    stroke = null
+                    if (s0 != null) play(StrokeSynth.decide(s0.first, s0.second, event.x, event.y, s0.third))
                 }
             }
         }
@@ -141,8 +141,7 @@ class AirInputService : AccessibilityService() {
     /** Отпустить виртуальные пальцы (рука пропала, экран погас, режим выключен). */
     fun cancelTouch() {
         main.post {
-            drag?.end(null)
-            drag = null
+            stroke = null
         }
     }
 
@@ -191,6 +190,32 @@ class AirInputService : AccessibilityService() {
         )
     }
 
+    private fun play(synth: Synth) {
+        when (synth) {
+            is Synth.Flick -> {
+                val a = toScreen(synth.x0, synth.y0)
+                val b = toScreen(synth.x1, synth.y1)
+                val path = Path().apply { moveTo(a.x, a.y); lineTo(b.x, b.y) }
+                markInjecting()
+                dispatchGesture(
+                    GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, FLICK_MS)).build(),
+                    null, null,
+                )
+            }
+            is Synth.LongPress -> {
+                val p = toScreen(synth.x, synth.y)
+                markInjecting()
+                dispatchGesture(
+                    GestureDescription.Builder()
+                        .addStroke(GestureDescription.StrokeDescription(Path().apply { moveTo(p.x, p.y) }, 0, LONG_PRESS_MS))
+                        .build(),
+                    null, null,
+                )
+            }
+            Synth.Nothing -> Unit
+        }
+    }
+
     private fun tap(p: PointF) {
         val path = Path().apply { moveTo(p.x, p.y) }
         markInjecting(); dispatchGesture(
@@ -199,128 +224,6 @@ class AirInputService : AccessibilityService() {
                 .build(),
             null, null,
         )
-    }
-
-    /**
-     * Виртуальный палец на экране на время щипка.
-     *
-     * Живой режим: цепочка коротких штрихов, каждый продолжает предыдущий (willContinue);
-     * следующий кусок отправляется, когда система закончила предыдущий.
-     *
-     * Страховка: Android обрывает «продолжаемый» жест, если в паузе между кусками приходит любой
-     * посторонний ввод. Поэтому весь путь руки записывается, и если касание оборвали — при отпускании
-     * щипка весь росчерк воспроизводится одним цельным жестом с той же траекторией и скоростью
-     * (листание, флик и долгое нажатие срабатывают в любом случае).
-     */
-    private inner class TouchSession(start: List<PointF>) {
-        private var last = start
-        private var target = start
-        private var ending = false
-        private var finished = false
-        private var broken = false
-        private var replayed = false
-        private var strokes: List<GestureDescription.StrokeDescription> = emptyList()
-        private val trail = ArrayList<PointF>()
-        private val trailT = ArrayList<Long>()
-
-        init {
-            record(start)
-        }
-
-        private fun record(points: List<PointF>) {
-            val p = points.firstOrNull() ?: return
-            trail += PointF(p.x, p.y)
-            trailT += android.os.SystemClock.uptimeMillis()
-        }
-
-        fun begin() {
-            strokes = last.map { p ->
-                GestureDescription.StrokeDescription(Path().apply { moveTo(p.x, p.y) }, 0, SEGMENT_MS, true)
-            }
-            send()
-        }
-
-        fun moveTo(points: List<PointF>) {
-            if (points.size != last.size || ending) return
-            target = points
-            record(points)
-        }
-
-        /** points == null — отпустить там, где пальцы сейчас. */
-        fun end(points: List<PointF>?) {
-            if (ending) return
-            if (points != null && points.size == last.size) {
-                target = points
-                record(points)
-            }
-            ending = true
-            if (broken) replay()
-        }
-
-        private fun next() {
-            if (finished || broken || strokes.isEmpty()) return
-            val from = last
-            val to = target
-            val isFinal = ending
-            strokes = strokes.mapIndexed { i, prev ->
-                val path = Path().apply {
-                    moveTo(from[i].x, from[i].y)
-                    lineTo(to[i].x, to[i].y)
-                }
-                prev.continueStroke(path, 0, SEGMENT_MS, !isFinal)
-            }
-            last = to
-            if (isFinal) finished = true
-            send()
-        }
-
-        private fun send() {
-            val builder = GestureDescription.Builder()
-            strokes.forEach { builder.addStroke(it) }
-            markInjecting()
-            val ok = dispatchGesture(
-                builder.build(),
-                object : GestureResultCallback() {
-                    override fun onCompleted(gestureDescription: GestureDescription?) {
-                        Stats.segmentsCompleted++
-                        next()
-                    }
-                    override fun onCancelled(gestureDescription: GestureDescription?) {
-                        Stats.segmentsCancelled++
-                        Log.w(TAG, "touch segment cancelled (ending=$ending) — will replay on release")
-                        broken = true
-                        if (ending) replay()
-                    }
-                },
-                main,
-            )
-            if (!ok) {
-                Stats.dispatchFailed++
-                broken = true
-                if (ending) replay()
-            }
-        }
-
-        /** Воспроизвести весь записанный росчерк одним жестом. */
-        private fun replay() {
-            if (replayed || trail.isEmpty() || last.size != 1) return
-            replayed = true
-            finished = true
-            val path = Path().apply {
-                moveTo(trail[0].x, trail[0].y)
-                for (i in 1 until trail.size) {
-                    if (trail[i].x != trail[i - 1].x || trail[i].y != trail[i - 1].y) lineTo(trail[i].x, trail[i].y)
-                }
-            }
-            val duration = (trailT.last() - trailT.first()).coerceIn(REPLAY_MIN_MS, REPLAY_MAX_MS)
-            Stats.replays++
-            markInjecting(); dispatchGesture(
-                GestureDescription.Builder()
-                    .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
-                    .build(),
-                null, null,
-            )
-        }
     }
 
     /**
@@ -404,9 +307,8 @@ class AirInputService : AccessibilityService() {
         private const val TAG = "AirTouch/Input"
         private const val TAP_MS = 50L
         /** Длина одного куска перетаскивания; ~частота кадров камеры. */
-        private const val SEGMENT_MS = 40L
-        private const val REPLAY_MIN_MS = 60L
-        private const val REPLAY_MAX_MS = 5000L
+        private const val FLICK_MS = 180L
+        private const val LONG_PRESS_MS = 800L
 
         @Volatile
         var instance: AirInputService? = null

@@ -99,6 +99,16 @@ class ShortsFeedTest {
     }
 
     @Test
+    fun restingPinchWithJitter_doesNothing_noMenu() {
+        // Как на видео: пальцы сведены, рука чуть дрогнула и замерла на 1.5 с — меню открываться не должно.
+        play(still(0.4f, 0.5f, 400, false) + still(0.4f, 0.5f, 100, true) + line(0.4f, 0.5f, 0.535f, 100, true) +
+            still(0.4f, 0.535f, 1500, true) + still(0.4f, 0.535f, 300, false))
+        Thread.sleep(1500)
+        assertEquals("menu opens", 0, TestFeedActivity.menuOpens.get())
+        assertEquals("still on first video", 0, page())
+    }
+
+    @Test
     fun quickPinch_pausesVideo_noMenu() {
         play(still(0.4f, 0.5f, 400, false) + still(0.4f, 0.5f, 130, true) + still(0.4f, 0.5f, 300, false))
         Thread.sleep(800)

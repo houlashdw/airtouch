@@ -293,6 +293,14 @@ class GestureEngineTest {
     }
 
     @Test
+    fun pinchMode_pinchWhileHandMoving_doesNotTap() {
+        // Курсор ехал, и пальцы случайно сошлись — нажатия быть не должно.
+        val sim = pinchSim().apply { x = 0.2f }.hold(300, finger).move(0.6f, 0.5f, 300, finger)
+            .move(0.62f, 0.5f, 130, finger, pinch = true).hold(300, finger)
+        assertEquals(emptyList<String?>(), kinds(sim.touches).filter { it == "Tap" })
+    }
+
+    @Test
     fun pinchMode_slowTapStillTaps() {
         val sim = pinchSim().hold(300, finger).hold(450, finger, pinch = true).hold(200, finger)
         assertEquals(listOf("Tap"), kinds(sim.touches))
