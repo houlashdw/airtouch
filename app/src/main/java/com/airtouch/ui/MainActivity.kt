@@ -360,10 +360,17 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
             ) { cursor = it; settings.cursorEnabled = it }
 
             SwitchRow(
-                title = "Подсветка экраном в темноте",
-                subtitle = "Светлая рамка по краям экрана освещает руку, когда темно. Кадр с камеры при этом ещё и осветляется программно.",
+                title = "Подсветка в темноте",
+                subtitle = "Когда темно: яркость экрана 100% и светлая рамка по краям — экран освещает руку. " +
+                    "Камера сама переходит на длинную выдержку и максимальную чувствительность.",
                 checked = screenLight,
             ) { screenLight = it; settings.screenLight = it }
+            val ctx = LocalContext.current
+            if (screenLight && !Settings.System.canWrite(ctx)) {
+                TextButton(onClick = {
+                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${ctx.packageName}")))
+                }) { Text("Разрешить менять яркость экрана") }
+            }
 
             SwitchRow(
                 title = "Воздушная клавиатура",

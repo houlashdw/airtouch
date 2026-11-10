@@ -17,10 +17,11 @@ import com.airtouch.gesture.GestureEngine
 import com.airtouch.gesture.HandFrame
 import com.airtouch.gesture.SystemAction
 import com.airtouch.keyboard.Dictionary
-import com.airtouch.keyboard.GlideDecoder
-import com.airtouch.keyboard.KeyboardController
-import com.airtouch.keyboard.KeyboardLayout
+import com.airtouch.keyboard.KbCell
 import com.airtouch.keyboard.Lang
+import com.airtouch.keyboard.ZoneDecoder
+import com.airtouch.keyboard.ZoneKeyboardController
+import com.airtouch.keyboard.ZoneLayout
 import com.airtouch.gesture.TouchEvent
 import com.airtouch.service.AirInputService
 import org.junit.After
@@ -174,25 +175,26 @@ class AirPipelineTest {
     }
 
     @Test
-    fun airKeyboard_glideTyping_insertsIntoField() {
+    fun airKeyboard_zoneTyping_insertsIntoField() {
         scenario.onActivity { it.edit.requestFocus() }
         Thread.sleep(300)
         val ctx = instr.targetContext
         val decoders = Lang.values().associateWith { lang ->
-            ctx.assets.open(Dictionary.assetName(lang)).bufferedReader().use {
-                GlideDecoder(KeyboardLayout.of(lang), Dictionary.parse(it))
-            }
+            ctx.assets.open(Dictionary.assetName(lang)).bufferedReader().use { ZoneDecoder(lang, Dictionary.parse(it)) }
         }
-        val kb = KeyboardController(service.textSink, { decoders[it] })
-        fun glide(word: String) {
-            val pts = word.map { c -> kb.layout.keys.first { it.char == c } }.map { it.cx to it.cy }
-            kb.onTouch(TouchEvent.Down(pts[0].first, pts[0].second))
-            pts.drop(1).forEach { kb.onTouch(TouchEvent.Move(it.first, it.second)) }
-            kb.onTouch(TouchEvent.Up(pts.last().first, pts.last().second))
-            Thread.sleep(200)
+        val kb = ZoneKeyboardController(service.textSink, { decoders[it] })
+        fun tapCell(kind: KbCell.Kind, index: Int = 0) {
+            val c = kb.view().cells.first { it.kind == kind && (kind != KbCell.Kind.ZONE || it.index == index) }
+            kb.onTouch(TouchEvent.Tap(c.cx, c.cy))
+            Thread.sleep(60)
         }
-        glide("привет")
-        glide("мир")
+        fun type(word: String) {
+            val z = ZoneLayout.zoneOf(kb.lang)
+            word.forEach { tapCell(KbCell.Kind.ZONE, z.getValue(it)) }
+            tapCell(KbCell.Kind.SPACE)
+        }
+        type("привет")
+        type("мир")
         Thread.sleep(300)
         var text = ""
         scenario.onActivity { text = it.edit.text.toString() }

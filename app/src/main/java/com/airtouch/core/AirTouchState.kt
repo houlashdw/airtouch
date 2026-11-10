@@ -91,6 +91,8 @@ object Timeouts {
     /** Ниже этой яркости кадр осветляется перед распознаванием (до ×4). */
     const val BRIGHTEN_BELOW_LUMA = 90f
     const val BRIGHTEN_TARGET_LUMA = 110f
+    /** В режиме «камера на максимум» выходим из него только при такой яркости кадра. */
+    const val DARK_EXIT_LUMA = 170f
 }
 
 /**

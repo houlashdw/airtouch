@@ -41,10 +41,9 @@ import com.airtouch.gesture.EngineOutput
 import com.airtouch.gesture.GestureEngine
 import com.airtouch.gesture.inverted
 import com.airtouch.keyboard.Dictionary
-import com.airtouch.keyboard.GlideDecoder
-import com.airtouch.keyboard.KeyboardController
-import com.airtouch.keyboard.KeyboardLayout
 import com.airtouch.keyboard.Lang
+import com.airtouch.keyboard.ZoneDecoder
+import com.airtouch.keyboard.ZoneKeyboardController
 import com.airtouch.gesture.HandFrame
 import com.airtouch.settings.AirTouchSettings
 import com.airtouch.ui.MainActivity
@@ -82,14 +81,55 @@ class GestureCameraService : LifecycleService() {
     private var exposureBoosted = false
 
     /** В темноте — максимальная экспокоррекция камеры, при нормальном свете — обратно 0. */
+    /**
+     * Темно → камера «на максимум»:
+     *  - если фронталка даёт ручное управление — выдержка 1/20 с и максимальная чувствительность (ISO);
+     *  - если нет — разрешаем автоэкспозиции опускаться до минимального FPS (длиннее выдержка);
+     *  - плюс максимальная экспокоррекция и яркость экрана 100% (подсвечивает руку).
+     * Светло → всё возвращается как было.
+     */
+    @OptIn(markerClass = [ExperimentalCamera2Interop::class])
     private fun updateExposure(dark: Boolean) {
         if (dark == exposureBoosted) return
         val cam = camera ?: return
-        val range = cam.cameraInfo.exposureState.exposureCompensationRange
-        if (!cam.cameraInfo.exposureState.isExposureCompensationSupported) return
         exposureBoosted = dark
-        cam.cameraControl.setExposureCompensationIndex(if (dark) range.upper else 0)
+        try {
+            val info = androidx.camera.camera2.interop.Camera2CameraInfo.from(cam.cameraInfo)
+            val control = androidx.camera.camera2.interop.Camera2CameraControl.from(cam.cameraControl)
+            if (dark) {
+                val caps = info.getCameraCharacteristic(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)
+                val manual = caps?.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR) == true
+                val iso = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)
+                val exp = info.getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+                val b = androidx.camera.camera2.interop.CaptureRequestOptions.Builder()
+                if (manual && iso != null && exp != null) {
+                    val t = DARK_EXPOSURE_NS.coerceIn(exp.lower, exp.upper)
+                    b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
+                    b.setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME, t)
+                    b.setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY, iso.upper)
+                    b.setCaptureRequestOption(CaptureRequest.SENSOR_FRAME_DURATION, t)
+                    Log.i(TAG, "dark: manual exposure ${t / 1_000_000} ms, ISO ${iso.upper}")
+                } else {
+                    info.getCameraCharacteristic(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                        ?.filter { it.upper <= 30 }
+                        ?.minWithOrNull(compareBy<Range<Int>>({ it.lower }, { -it.upper }))
+                        ?.let { b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+                    val ev = cam.cameraInfo.exposureState
+                    if (ev.isExposureCompensationSupported) cam.cameraControl.setExposureCompensationIndex(ev.exposureCompensationRange.upper)
+                    Log.i(TAG, "dark: auto exposure with low fps + max EV")
+                }
+                control.setCaptureRequestOptions(b.build())
+            } else {
+                control.clearCaptureRequestOptions()
+                cam.cameraControl.setExposureCompensationIndex(0)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "exposure control failed", e)
+        }
+        screenLight.set(dark && settings.screenLight)
     }
+
+    private val screenLight by lazy { ScreenBrightness(this) }
     private var watchdog: Job? = null
 
     @Volatile private var mirror = true
@@ -130,8 +170,8 @@ class GestureCameraService : LifecycleService() {
 
     // ---------------- Воздушная клавиатура ----------------
 
-    @Volatile private var decoders: Map<Lang, GlideDecoder> = emptyMap()
-    private var keyboard: KeyboardController? = null // только поток MediaPipe
+    @Volatile private var decoders: Map<Lang, ZoneDecoder> = emptyMap()
+    private var keyboard: ZoneKeyboardController? = null // только поток MediaPipe
 
     /** Словари RU/EN (~1 МБ) грузим в фоне один раз — к первому открытию клавиатуры они готовы. */
     private fun loadDictionaries() {
@@ -139,7 +179,7 @@ class GestureCameraService : LifecycleService() {
             try {
                 decoders = Lang.values().associateWith { lang ->
                     assets.open(Dictionary.assetName(lang)).bufferedReader().use {
-                        GlideDecoder(KeyboardLayout.of(lang), Dictionary.parse(it))
+                        ZoneDecoder(lang, Dictionary.parse(it))
                     }
                 }
             } catch (e: Exception) {
@@ -151,8 +191,8 @@ class GestureCameraService : LifecycleService() {
         }.start()
     }
 
-    private fun keyboardFor(input: AirInputService): KeyboardController =
-        keyboard ?: KeyboardController(input.textSink, { decoders[it] }).also { keyboard = it }
+    private fun keyboardFor(input: AirInputService): ZoneKeyboardController =
+        keyboard ?: ZoneKeyboardController(input.textSink, { decoders[it] }).also { keyboard = it }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -224,6 +264,7 @@ class GestureCameraService : LifecycleService() {
         cameraProvider = null
         camera = null
         exposureBoosted = false
+        screenLight.set(false)
         tracker?.let { t -> cameraExecutor.execute { t.close() } } // после уже поставленных кадров
         tracker = null
         isRunning = false
@@ -348,7 +389,8 @@ class GestureCameraService : LifecycleService() {
 
             if (frameCounter % Timeouts.LUMA_EVERY_N_FRAMES == 0L) {
                 lastLuma = FrameUtils.meanLuma(raw)
-                val dark = lastLuma < Timeouts.BRIGHTEN_BELOW_LUMA
+                // Гистерезис: «на максимуме» кадр сам по себе светлее — выходим, только когда стало заметно светло.
+                val dark = if (exposureBoosted) lastLuma < Timeouts.DARK_EXIT_LUMA else lastLuma < Timeouts.BRIGHTEN_BELOW_LUMA
                 ContextCompat.getMainExecutor(this).execute { updateExposure(dark) }
                 val low = lastLuma < Timeouts.LOW_LIGHT_LUMA
                 if (low != AirTouchState.status.value.lowLight) AirTouchState.update { s -> s.copy(lowLight = low) }
@@ -511,6 +553,7 @@ class GestureCameraService : LifecycleService() {
         const val ACTION_STOP = "com.airtouch.action.STOP"
         private const val CHANNEL_ID = "air_mode"
         private const val NOTIFICATION_ID = 42
+        private const val DARK_EXPOSURE_NS = 50_000_000L
 
         @Volatile
         var isRunning = false

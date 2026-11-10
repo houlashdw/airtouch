@@ -19,8 +19,6 @@ import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import android.graphics.Path
 import android.graphics.RectF
-import com.airtouch.keyboard.KeyCode
-import com.airtouch.keyboard.KeyboardLayout
 import com.airtouch.keyboard.Lang
 import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.DOCK_ACTIONS
@@ -433,47 +431,44 @@ private class AirKeyboardView(context: Context) : View(context) {
     override fun onDraw(canvas: Canvas) {
         val s = status
         val view = s.keyboard
-        val layout = KeyboardLayout.of(view?.lang ?: Lang.RU)
         val w = width.toFloat()
         val h = height.toFloat()
         canvas.drawRect(0f, 0f, w, h, bg)
+        val cells = view?.cells ?: com.airtouch.keyboard.ZoneLayout.cells(Lang.RU, emptyList())
+        val pad = 4 * d
+        val zoneH = h * 0.21f
+        text.textSize = zoneH * 0.26f
+        sugg.textSize = h * 0.18f * 0.36f
+        hint.textSize = sugg.textSize * 0.75f
 
-        val pad = 3 * d
-        val keyH = h / layout.rows
-        text.textSize = minOf(keyH * 0.42f, w / layout.cols * 0.6f)
-        sugg.textSize = text.textSize * 0.9f
-        hint.textSize = text.textSize * 0.7f
-
-        for (key in layout.keys) {
-            rect.set((key.cx - key.w / 2) * w + pad, (key.cy - key.h / 2) * h + pad, (key.cx + key.w / 2) * w - pad, (key.cy + key.h / 2) * h - pad)
-            val baseline = rect.centerY() + text.textSize * 0.35f
-            if (key.code == KeyCode.SUGGESTION) {
-                val word = view?.suggestions?.getOrNull(key.index)
-                if (word != null) {
-                    if (view?.hover == key) canvas.drawRoundRect(rect, 8 * d, 8 * d, hoverPaint)
-                    canvas.drawText(word, rect.centerX(), baseline, sugg)
-                } else if (key.index == 1) {
-                    canvas.drawText("🤏 щипок и веди по буквам", rect.centerX(), baseline, hint)
+        cells.forEachIndexed { i, c ->
+            rect.set(c.left * w + pad, c.top * h + pad, c.right * w - pad, c.bottom * h - pad)
+            val hovered = view?.hover == i
+            when (c.kind) {
+                com.airtouch.keyboard.KbCell.Kind.SUGGESTION -> {
+                    if (c.label.isNotEmpty()) {
+                        if (hovered) canvas.drawRoundRect(rect, 12 * d, 12 * d, hoverPaint)
+                        else if (c.index == 0) canvas.drawRoundRect(rect, 12 * d, 12 * d, specialPaint)
+                        canvas.drawText(c.label, rect.centerX(), rect.centerY() + sugg.textSize * 0.35f, sugg)
+                    } else if (c.index == 1 && (view?.typedLetters ?: 0) == 0) {
+                        canvas.drawText("🤏 щипок по зоне с буквой", rect.centerX(), rect.centerY() + hint.textSize * 0.35f, hint)
+                    }
                 }
-                if (key.index > 0) canvas.drawLine(rect.left - pad, rect.top + pad, rect.left - pad, rect.bottom - pad, divider)
-                continue
+                com.airtouch.keyboard.KbCell.Kind.ZONE -> {
+                    canvas.drawRoundRect(rect, 18 * d, 18 * d, if (hovered) hoverPaint else keyPaint)
+                    // Буквы зоны крупно и с разрядкой.
+                    canvas.drawText(c.label.toList().joinToString(" "), rect.centerX(), rect.centerY() + text.textSize * 0.35f, text)
+                }
+                else -> {
+                    canvas.drawRoundRect(rect, 12 * d, 12 * d, if (hovered) hoverPaint else specialPaint)
+                    canvas.drawText(c.label, rect.centerX(), rect.centerY() + sugg.textSize * 0.35f, sugg)
+                }
             }
-            val paint = when {
-                view?.hover == key -> hoverPaint
-                key.code == KeyCode.CHAR -> keyPaint
-                else -> specialPaint
-            }
-            canvas.drawRoundRect(rect, 8 * d, 8 * d, paint)
-            canvas.drawText(key.label, rect.centerX(), baseline, text)
         }
 
-        val stroke = view?.stroke.orEmpty()
-        if (stroke.size >= 2) {
-            path.reset()
-            path.moveTo(stroke[0].first * w, stroke[0].second * h)
-            for (i in 1 until stroke.size) path.lineTo(stroke[i].first * w, stroke[i].second * h)
-            canvas.drawPath(path, strokePaint)
-        }
+        // Сколько букв уже набрано — точки над подсказками.
+        val n = view?.typedLetters ?: 0
+        for (k in 0 until n) canvas.drawCircle(w / 2 - (n - 1) * 7 * d + k * 14 * d, 6 * d, 3 * d, sugg)
 
         if (s.kbCursorVisible) {
             val cx = s.kbCursorX * w
