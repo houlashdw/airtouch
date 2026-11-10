@@ -47,7 +47,7 @@ class AirTouchSettings(context: Context) {
         set(v) = prefs.edit { putBoolean(KEY_SCREEN_LIGHT, v) }
 
     var airKeyboard: Boolean
-        get() = prefs.getBoolean(KEY_AIR_KEYBOARD, true)
+        get() = prefs.getBoolean(KEY_AIR_KEYBOARD, false)
         set(v) = prefs.edit { putBoolean(KEY_AIR_KEYBOARD, v) }
 
     var invertSwipes: Boolean

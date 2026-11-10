@@ -46,6 +46,21 @@ data class CursorConfig(
     val regionBottom: Float = 0.80f,
     /** Скачок курсора больше этого за кадр — сбой трекинга, кадр пропускаем. */
     val maxJump: Float = 0.2f,
+    /**
+     * Курсор как тачпад: двигается от ДВИЖЕНИЯ руки, а не от её места в кадре.
+     * Ракурс телефона и где рука в кадре — неважно; рука ушла — курсор остался на месте.
+     */
+    val relative: Boolean = true,
+    /** Сколько экрана проезжает курсор за движение руки на одну длину ладони: медленно… */
+    val gainSlow: Float = 0.35f,
+    /** …и быстро (ускорение как у мышки). */
+    val gainFast: Float = 1.5f,
+    /** Скорость руки (ладоней в секунду), при которой ускорение максимальное. */
+    val fastSpeed: Float = 5f,
+    /** Экран высокий — по вертикали курсор едет медленнее, чтобы движение ощущалось одинаково. */
+    val verticalGain: Float = 0.55f,
+    /** Микродвижения меньше этой доли ладони за кадр — дрожание, курсор стоит. */
+    val deadZonePalm: Float = 0.015f,
     /** Рука сдвинулась больше этого за ~250 мс до щипка — нажатия не будет (курсор ехал, щипок случайный). */
     val stillForTap: Float = 0.04f,
 )
@@ -71,6 +86,14 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     private var rawPrev: Pair<Float, Float>? = null
     private var jumpFrames = 0
     private var movingAtPinch = false
+    // Тачпад: позиция курсора переживает пропажу руки.
+    private var relX = 0.5f
+    private var relY = 0.5f
+    private var relPrev: Pair<Float, Float>? = null
+    private var relPrevT = 0L
+    private var lastRaw: Pair<Float, Float>? = null
+    private var accX = 0f
+    private var accY = 0f
     /** Позиции курсора за последние ~300 мс — чтобы нажать туда, где курсор был ДО щипка. */
     private val trail = ArrayDeque<Triple<Long, Float, Float>>()
     private var pinched = false
@@ -96,6 +119,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         fy.reset()
         trail.clear()
         rawPrev = null
+        relPrev = null
+        lastRaw = null
         ignoring = false
         cursor = null
         return up
@@ -122,18 +147,55 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         val lm = frame.landmarks
         val mx = (lm[Lm.INDEX_MCP].x + lm[Lm.INDEX_PIP].x) / 2f
         val my = (lm[Lm.INDEX_MCP].y + lm[Lm.INDEX_PIP].y) / 2f
-        val sx = ((mx - cfg.regionLeft) / (cfg.regionRight - cfg.regionLeft)).coerceIn(0f, 1f)
-        val sy = ((my - cfg.regionTop) / (cfg.regionBottom - cfg.regionTop)).coerceIn(0f, 1f)
-        // Сбой трекинга: курсор «телепортировался» — не верим 1–2 кадрам.
-        val rp = rawPrev
-        if (rp != null && hypot(sx - rp.first, sy - rp.second) > cfg.maxJump && jumpFrames < 2) {
-            jumpFrames++
-            return null
+        val x: Float
+        val y: Float
+        if (cfg.relative) {
+            // Координаты в единицах короткой стороны кадра, движение — в длинах ладони:
+            // одинаково на 20 см и на метре от камеры.
+            // Путь руки копим сразу в длинах ладони и уже его сглаживаем — так фильтр одинаково
+            // ведёт себя для близкой и далёкой руки.
+            val palm = frame.dist(Lm.WRIST, Lm.MIDDLE_MCP).coerceAtLeast(0.02f)
+            val rx = mx * frame.xScale
+            val ry = my * frame.yScale
+            val lr = lastRaw
+            if (lr != null) {
+                val ddx = (rx - lr.first) / palm
+                val ddy = (ry - lr.second) / palm
+                if (hypot(ddx, ddy) <= 1.5f) { accX += ddx; accY += ddy } // больше — сбой трекинга
+            }
+            lastRaw = rx to ry
+            val fxv = fx.filter(accX, t)
+            val fyv = fy.filter(accY, t)
+            val prev = relPrev
+            if (prev != null) {
+                var dx = fxv - prev.first
+                var dy = fyv - prev.second
+                val dist = hypot(dx, dy)
+                if (dist > 1.5f || dist < cfg.deadZonePalm) { dx = 0f; dy = 0f } // сбой трекинга / дрожание
+                val dt = (t - relPrevT).coerceAtLeast(1L) / 1000f
+                val k = ((dist / dt) / cfg.fastSpeed).coerceIn(0f, 1f)
+                val gain = cfg.gainSlow + (cfg.gainFast - cfg.gainSlow) * k
+                relX = (relX + dx * gain).coerceIn(0f, 1f)
+                relY = (relY + dy * gain * cfg.verticalGain).coerceIn(0f, 1f)
+            }
+            relPrev = fxv to fyv
+            relPrevT = t
+            x = relX
+            y = relY
+        } else {
+            val sx = ((mx - cfg.regionLeft) / (cfg.regionRight - cfg.regionLeft)).coerceIn(0f, 1f)
+            val sy = ((my - cfg.regionTop) / (cfg.regionBottom - cfg.regionTop)).coerceIn(0f, 1f)
+            // Сбой трекинга: курсор «телепортировался» — не верим 1–2 кадрам.
+            val rp = rawPrev
+            if (rp != null && hypot(sx - rp.first, sy - rp.second) > cfg.maxJump && jumpFrames < 2) {
+                jumpFrames++
+                return null
+            }
+            jumpFrames = 0
+            rawPrev = sx to sy
+            x = fx.filter(sx, t)
+            y = fy.filter(sy, t)
         }
-        jumpFrames = 0
-        rawPrev = sx to sy
-        val x = fx.filter(sx, t)
-        val y = fy.filter(sy, t)
         cursor = Cursor(x, y, pinched)
         trail.addLast(Triple(t, x, y))
         while (trail.isNotEmpty() && t - trail.first().first > 300) trail.removeFirst()

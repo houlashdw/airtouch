@@ -101,11 +101,11 @@ class OverlayController(private val service: AccessibilityService) {
     private fun render(status: AirTouchState.Status) {
         (buttonView?.background as? GradientDrawable)?.setColor(
             when (status.mode) {
-                Mode.OFF -> 0x99505560.toInt()
-                Mode.ACTIVE -> if (status.handVisible) 0xE616A34A.toInt() else 0xE622C55E.toInt()
-                Mode.IDLE -> 0xE6F59E0B.toInt()
-                Mode.PAUSED -> 0xCC3B82F6.toInt()
-                Mode.ERROR -> 0xE6DC2626.toInt()
+                Mode.OFF -> 0x66303338
+                Mode.ACTIVE -> if (status.handVisible) 0xCC10B981.toInt() else 0x8810B981.toInt()
+                Mode.IDLE -> 0x66303338
+                Mode.PAUSED -> 0x66303338
+                Mode.ERROR -> 0xCCEF4444.toInt()
             },
         )
         trackerView?.update(status)
@@ -151,7 +151,7 @@ class OverlayController(private val service: AccessibilityService) {
 
     @SuppressLint("ClickableViewAccessibility") // performClick вызывается вручную в DragOrTap
     private fun createButton(): TextView {
-        val size = (56 * density).toInt()
+        val size = (34 * density).toInt()
         val bounds = wm.currentWindowMetrics.bounds
         buttonParams = WindowManager.LayoutParams(
             size, size,
@@ -160,15 +160,17 @@ class OverlayController(private val service: AccessibilityService) {
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = bounds.width() - size - (8 * density).toInt()
+            x = bounds.width() - size - (4 * density).toInt()
             y = (bounds.height() * 0.35f).toInt()
         }
         return TextView(service).apply {
-            text = "✋"
-            textSize = 24f
+            text = ""
             gravity = Gravity.CENTER
-            background = GradientDrawable().apply { shape = GradientDrawable.OVAL }
-            elevation = 6 * density
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setStroke((1.5f * density).toInt(), 0x66FFFFFF)
+            }
+            alpha = 0.7f
             contentDescription = "AirTouch: включить или выключить жесты"
             setOnTouchListener(DragOrTap())
         }
@@ -231,11 +233,16 @@ private class TrackerView(context: Context) : View(context) {
     private val arrowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFFFFFFF.toInt(); textSize = 28 * d; textAlign = Paint.Align.CENTER; isFakeBoldText = true
     }
+    // Курсор — маленькая белая точка с мягкой тенью; при щипке сжимается.
     private val cursorRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE; strokeWidth = 3 * d; color = 0xFFFFFFFF.toInt()
+        style = Paint.Style.STROKE; strokeWidth = 1.5f * d; color = 0x55000000
     }
-    private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x993B82F6.toInt() }
-    private val cursorPressed = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFF2563EB.toInt() }
+    private val cursorFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xF2FFFFFF.toInt(); setShadowLayer(4 * d, 0f, 1 * d, 0x66000000)
+    }
+    private val cursorPressed = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFFFFFFF.toInt(); setShadowLayer(6 * d, 0f, 0f, 0xAA3B82F6.toInt())
+    }
     private val holdTrack = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE; strokeWidth = 6 * d; color = 0x55FFFFFF
     }
@@ -324,13 +331,9 @@ private class TrackerView(context: Context) : View(context) {
         if (s.cursorVisible) {
             val cx = s.cursorX * width
             val cy = s.cursorY * height
-            if (s.pinching) {
-                canvas.drawCircle(cx, cy, 11 * d, cursorPressed)
-                canvas.drawCircle(cx, cy, 11 * d, cursorRing)
-            } else {
-                canvas.drawCircle(cx, cy, 16 * d, cursorFill)
-                canvas.drawCircle(cx, cy, 16 * d, cursorRing)
-            }
+            val r = if (s.pinching) 4.5f * d else 6.5f * d
+            canvas.drawCircle(cx, cy, r, if (s.pinching) cursorPressed else cursorFill)
+            canvas.drawCircle(cx, cy, r, cursorRing)
             return
         }
 

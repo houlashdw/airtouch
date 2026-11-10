@@ -49,7 +49,7 @@ class ShortsFeedTest {
     fun tearDown() = scenario.close()
 
     private fun play(script: List<Triple<Float, Float, Boolean>>) {
-        val engine = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0, maxPalmSize = 1f))
+        val engine = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0, maxPalmSize = 1f, cursor = CursorConfig(relative = false)))
         for ((sx, sy, pinch) in script) {
             val cx = c.regionLeft + sx * (c.regionRight - c.regionLeft) + 0.045f
             val cy = c.regionTop + sy * (c.regionBottom - c.regionTop) + 0.0375f

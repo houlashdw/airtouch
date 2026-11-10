@@ -15,6 +15,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.material3.Surface
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,7 +30,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
@@ -50,10 +57,7 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
-import com.airtouch.gesture.AirGesture
 import com.airtouch.gesture.ControlMode
-import com.airtouch.gesture.HandPose
-import com.airtouch.gesture.SystemAction
 import com.airtouch.service.AirInputService
 import com.airtouch.service.GestureCameraService
 import com.airtouch.settings.AirTouchSettings
@@ -90,21 +94,21 @@ private fun AirTouchScreen() {
     var cameraOk by remember { mutableStateOf(GestureCameraService.hasCameraPermission(context)) }
     var notificationsOk by remember { mutableStateOf(notificationsGranted(context)) }
     var a11yOk by remember { mutableStateOf(AirInputService.isEnabledInSettings(context)) }
-
-    // Пользователь возвращается из системных настроек — перепроверяем всё.
     LifecycleResumeEffect(Unit) {
         cameraOk = GestureCameraService.hasCameraPermission(context)
         notificationsOk = notificationsGranted(context)
         a11yOk = AirInputService.isEnabledInSettings(context)
         onPauseOrDispose { }
     }
-
     val cameraLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { cameraOk = it }
     val notificationsLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { notificationsOk = it }
 
     val status by AirTouchState.status.collectAsStateWithLifecycle()
+    var mode by remember { mutableStateOf(settings.controlMode) }
+    var showSettings by remember { mutableStateOf(false) }
+    val ready = cameraOk && a11yOk
 
     Scaffold { padding ->
         Column(
@@ -112,199 +116,129 @@ private fun AirTouchScreen() {
                 .fillMaxSize()
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Text("AirTouch", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.height(24.dp))
+            Text("AirTouch", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "Листайте ленты, фото и страницы махом ладони. Распознавание идёт только на телефоне.",
+                statusLine(status),
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
             )
 
-            Text("Настройка", style = MaterialTheme.typography.titleMedium)
-            StepCard(
-                n = 1, title = "Камера", done = cameraOk,
-                text = "Нужна, чтобы видеть руку. Кадры не сохраняются и никуда не отправляются.",
-                action = "Разрешить",
-            ) { cameraLauncher.launch(Manifest.permission.CAMERA) }
-
-            StepCard(
-                n = 2, title = "Уведомления", done = notificationsOk,
-                text = "Пока камера включена, в шторке висит уведомление с кнопкой «Стоп».",
-                action = "Разрешить",
-            ) {
-                if (Build.VERSION.SDK_INT >= 33) notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-
-            StepCard(
-                n = 3, title = "Служба специальных возможностей", done = a11yOk,
-                text = "Через неё AirTouch делает свайпы в любых приложениях и показывает плавающую кнопку. " +
-                    "Откройте «Специальные возможности» → «Установленные приложения» → AirTouch → включить.\n\n" +
-                    "Если переключатель серый (Android 13+, установка не из магазина): " +
-                    "«О приложении» → ⋮ → «Разрешить ограниченные настройки».",
-                action = "Открыть настройки",
-                secondaryAction = "О приложении",
-                onSecondary = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
-                    )
-                },
-            ) { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-
-            ControlCard(status = status, ready = cameraOk && a11yOk) {
+            PowerButton(on = status.isRunning, enabled = ready || status.isRunning) {
                 if (status.isRunning) GestureCameraService.stop(context) else GestureCameraService.start(context)
             }
 
-            var mode by remember { mutableStateOf(settings.controlMode) }
-            ModeCard(mode) { mode = it; settings.controlMode = it }
+            if (status.isRunning && status.fps > 0) {
+                Text(
+                    "${status.fps} кадров/с" + if (status.lowLight) " · темно — подсвечиваю" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
-            SettingsCard(settings, mode)
-
-            ElevatedCard {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Жесты", style = MaterialTheme.typography.titleMedium)
-                    if (mode == ControlMode.PINCH) {
-                        Text("✋ Рука двигается — двигается курсор. Больше ничего не происходит.")
-                        Text("🤏 Быстрый щипок (большой + указательный) — нажать")
-                        Text("🤏 Щипок и вести — листать / прокручивать / перетаскивать")
-                        Text("🤏 Щипок и держать — долгое нажатие")
-                        Text("👇 Опустите руку вниз — выедет панель ◁ ○ ▢ 🔔, нажмите щипком")
-                    } else {
-                        Text("👋 Мах любой формой руки — листать ←→↑↓")
-                        Text("👉 Тык (рука к экрану и обратно) — домой")
-                        Text("👉 Тык и задержать руку у экрана — недавние приложения")
-                        Text("✌️ «V» неподвижно полсекунды — назад")
-                        Text("☝️🤏 Курсор и щипок — включаются отдельно в настройках")
+            if (!ready || !notificationsOk) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Нужно один раз разрешить", style = MaterialTheme.typography.titleSmall)
+                    SetupRow("Камера", cameraOk) { cameraLauncher.launch(Manifest.permission.CAMERA) }
+                    SetupRow("Уведомления", notificationsOk) {
+                        if (Build.VERSION.SDK_INT >= 33) notificationsLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                    Text("⌨️ Поле ввода → воздушная клавиатура: 🤏 росчерк через буквы — слово, быстрый щипок — буква, ⌫ после росчерка стирает слово, ✌️ — закрыть")
+                    SetupRow("Специальные возможности → AirTouch", a11yOk) {
+                        context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                    }
+                    if (!a11yOk) {
+                        TextButton(onClick = {
+                            context.startActivity(
+                                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")),
+                            )
+                        }) { Text("Переключатель серый? О приложении → ⋮ → Разрешить ограниченные настройки") }
+                    }
                 }
             }
 
-            ElevatedCard {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Советы", style = MaterialTheme.typography.titleMedium)
-                    Text("• Рука целиком в кадре фронталки: 20–40 см от телефона, не вплотную.")
-                    if (mode == ControlMode.PINCH) {
-                        Text("• Щипок — кончики большого и указательного касаются, указательный не прячьте в кулак.")
-                        Text("• Чтобы пролистать ленту: щипок, быстрый росчерк вверх, разжать — как пальцем по экрану.")
-                    } else {
-                        Text("• Покажите руку, затем мах. Подъём руки в кадр не считается.")
-                        Text("• Листать подряд можно без пауз; в обратную сторону — задержите руку на миг.")
-                        Text("• Тык — короткое движение всей рукой к телефону, сантиметров на 10.")
-                    }
-                    Text("• В темноте точность падает — включите свет.")
+            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                if (mode == ControlMode.PINCH) {
+                    HowTo("Двигайте рукой — курсор едет, как на тачпаде")
+                    HowTo("Сведите большой и указательный — нажатие")
+                    HowTo("Сведите и махните — листать")
+                    HowTo("Курсор к нижнему краю — кнопки ◁ ○ ▢")
+                } else {
+                    HowTo("Мах рукой — листать")
+                    HowTo("Тык рукой к экрану — домой")
+                    HowTo("✌️ неподвижно — назад")
                 }
             }
+
+            TextButton(onClick = { showSettings = !showSettings }) {
+                Text(if (showSettings) "Скрыть настройки" else "Настройки")
+            }
+            if (showSettings) {
+                ModeCard(mode) { mode = it; settings.controlMode = it }
+                SettingsCard(settings, mode)
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
+private fun statusLine(s: AirTouchState.Status): String = when (s.mode) {
+    Mode.OFF -> "Выключено"
+    Mode.ACTIVE -> when {
+        s.dockVisible -> "Панель кнопок"
+        s.handVisible -> "Рука видна"
+        else -> "Покажите руку камере"
+    }
+    Mode.IDLE -> "Жду руку"
+    Mode.PAUSED -> "Пауза — экран был выключен"
+    Mode.ERROR -> s.error ?: "Ошибка"
+}
+
 @Composable
-private fun StepCard(
-    n: Int,
-    title: String,
-    text: String,
-    done: Boolean,
-    action: String,
-    secondaryAction: String? = null,
-    onSecondary: () -> Unit = {},
-    onAction: () -> Unit,
-) {
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+private fun PowerButton(on: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val bg = when {
+        on -> MaterialTheme.colorScheme.primary
+        enabled -> MaterialTheme.colorScheme.surfaceVariant
+        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+    }
+    Surface(
+        onClick = onClick,
+        enabled = enabled,
+        shape = CircleShape,
+        color = bg,
+        modifier = Modifier.size(150.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center) {
             Text(
-                (if (done) "✅ " else "$n. ") + title,
-                style = MaterialTheme.typography.titleSmall,
+                if (on) "Вкл" else "Выкл",
+                style = MaterialTheme.typography.titleLarge,
+                color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (!done) {
-                Text(text, style = MaterialTheme.typography.bodySmall)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onAction) { Text(action) }
-                    if (secondaryAction != null) TextButton(onClick = onSecondary) { Text(secondaryAction) }
-                }
-            }
         }
     }
 }
 
 @Composable
-private fun ControlCard(status: AirTouchState.Status, ready: Boolean, onToggle: () -> Unit) {
-    val stateText = when (status.mode) {
-        Mode.OFF -> "Выключено"
-        Mode.ACTIVE -> if (status.handVisible) "Рука видна ✋" else "Ищу руку…"
-        Mode.IDLE -> "Жду руку (экономный режим)"
-        Mode.PAUSED -> "Пауза: экран был выключен"
-        Mode.ERROR -> status.error ?: "Ошибка"
+private fun SetupRow(title: String, done: Boolean, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(if (done) "✓" else "•", modifier = Modifier.width(24.dp), color = MaterialTheme.colorScheme.primary)
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        if (!done) TextButton(onClick = onClick) { Text("Разрешить") }
     }
-    val lastGesture = when (status.lastGesture) {
-        AirGesture.SwipeLeft -> "← влево"
-        AirGesture.SwipeRight -> "→ вправо"
-        AirGesture.SwipeUp -> "↑ вверх"
-        AirGesture.SwipeDown -> "↓ вниз"
-        null -> null
-    }
-    ElevatedCard(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Режим жестов", style = MaterialTheme.typography.titleMedium)
-            Text(stateText)
-            if (status.isRunning && status.lowLight) {
-                Text("⚠️ Мало света — точность снижена", color = MaterialTheme.colorScheme.error)
-            }
-            if (status.mode == Mode.ACTIVE) {
-                val seen = when {
-                    status.holdAction == SystemAction.BACK -> "✌️ держите — назад"
-                    status.holdAction == SystemAction.RECENTS -> "тык — держите руку: недавние"
-                    status.cursorVisible && status.pinching -> "щипок 🤏 — нажатие"
-                    status.dockVisible -> "панель кнопок — нажмите щипком"
-                    status.cursorVisible -> "руку — это курсор"
-                    status.pose == HandPose.V_SIGN -> "✌️ — замрите, чтобы «назад»"
-                    status.pose != null -> "руку — машите или тыкайте"
-                    else -> "пока ничего. Отодвиньте руку на 20–40 см, чтобы она целиком попала в камеру"
-                }
-                Text("Вижу: $seen")
-            }
-            if (lastGesture != null) Text("Последний мах: $lastGesture")
-            val lastAction = when (status.lastAction) {
-                SystemAction.HOME -> "домой"
-                SystemAction.BACK -> "назад"
-                SystemAction.RECENTS -> "недавние"
-                SystemAction.NOTIFICATIONS -> "уведомления"
-                null -> null
-            }
-            if (lastAction != null) Text("Последнее действие: $lastAction")
-            if (status.mode == Mode.ACTIVE || status.mode == Mode.IDLE) {
-                val fpsNote = when {
-                    status.fps == 0 -> ""
-                    status.fps < 15 -> " — мало! Камера/процессор не успевают"
-                    status.fps < 24 -> " — средне"
-                    else -> " — хорошо"
-                }
-                Text(
-                    "Камера: ${status.fps} кадров/с$fpsNote" +
-                        if (status.latencyMs > 0) ", распознавание ${status.latencyMs} мс" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Button(onClick = onToggle, enabled = ready || status.isRunning, modifier = Modifier.fillMaxWidth()) {
-                Text(if (status.isRunning) "Выключить" else "Включить")
-            }
-            if (status.isRunning) {
-                Text(
-                    "Работает, пока горит экран. Экран погас — пауза, включили — продолжает сам. " +
-                        "Камера включена постоянно, поэтому батарея садится быстрее.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            if (!ready) {
-                Text("Сначала пройдите шаги настройки выше.", style = MaterialTheme.typography.bodySmall)
-            } else {
-                Text(
-                    "Дальше можно управлять плавающей кнопкой ✋ поверх любых приложений.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-    }
+}
+
+@Composable
+private fun HowTo(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable

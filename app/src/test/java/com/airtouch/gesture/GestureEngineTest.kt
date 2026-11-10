@@ -234,6 +234,45 @@ class GestureEngineTest {
         assertEquals("Up", k.last())
     }
 
+    // ---------- Курсор-тачпад ----------
+
+    @Test
+    fun trackpadCursor_handPositionInFrameDoesNotMatter() {
+        // Одинаковое движение руки в разных местах кадра двигает курсор одинаково.
+        fun shift(startX: Float, startY: Float): Float {
+            val sim = pinchSim().apply { x = startX; y = startY }.hold(300, finger)
+            val before = sim.engine.cursor!!.x
+            sim.move(startX + 0.06f, startY, 300, finger).hold(200, finger)
+            return sim.engine.cursor!!.x - before
+        }
+        val a = shift(0.3f, 0.35f)
+        val b = shift(0.6f, 0.65f)
+        assert(a > 0.05f && kotlin.math.abs(a - b) < 0.03f) { "a=$a b=$b" }
+    }
+
+    @Test
+    fun trackpadCursor_sameMotionFarOrNear_sameShift() {
+        fun shift(size: Float): Float {
+            val sim = pinchSim().apply { this.size = size }.hold(300, finger)
+            val before = sim.engine.cursor!!.x
+            sim.move(0.5f + size * 0.5f, 0.5f, 300, finger).hold(200, finger) // полладони вправо
+            return sim.engine.cursor!!.x - before
+        }
+        val near = shift(0.18f)
+        val far = shift(0.07f) // рука далеко — в кадре меньше
+        assert(near > 0.05f && kotlin.math.abs(near - far) < 0.04f) { "near=$near far=$far" }
+    }
+
+    @Test
+    fun trackpadCursor_staysWhenHandLeavesAndReturnsElsewhere() {
+        val sim = pinchSim().hold(300, finger).move(0.6f, 0.5f, 300, finger).hold(200, finger)
+        val kept = sim.engine.cursor!!.x
+        sim.lose()
+        sim.x = 0.25f; sim.y = 0.7f // вернули руку совсем в другом месте кадра
+        sim.hold(300, finger)
+        assert(kotlin.math.abs(sim.engine.cursor!!.x - kept) < 0.02f) { "cursor jumped: $kept -> ${sim.engine.cursor}" }
+    }
+
     // ---------- «Я просто пользуюсь телефоном» ----------
 
     @Test
@@ -295,8 +334,8 @@ class GestureEngineTest {
     @Test
     fun pinchMode_pinchWhileHandMoving_doesNotTap() {
         // Курсор ехал, и пальцы случайно сошлись — нажатия быть не должно.
-        val sim = pinchSim().apply { x = 0.2f }.hold(300, finger).move(0.6f, 0.5f, 300, finger)
-            .move(0.62f, 0.5f, 130, finger, pinch = true).hold(300, finger)
+        val sim = pinchSim().apply { x = 0.45f }.hold(300, finger).move(0.5f, 0.5f, 300, finger)
+            .move(0.51f, 0.5f, 130, finger, pinch = true).hold(300, finger)
         assertEquals(emptyList<String?>(), kinds(sim.touches).filter { it == "Tap" })
     }
 
@@ -309,7 +348,8 @@ class GestureEngineTest {
     @Test
     fun pinchMode_lowerHandToBottom_showsDock_andTapRunsAction() {
         // Опустили руку в самый низ (курсор упирается в край), подождали — панель выехала.
-        val sim = pinchSim().apply { x = 0.2f; y = 0.5f }.hold(200, finger).move(0.2f, 0.86f, 300, finger)
+        // Курсор-тачпад: повели руку влево (курсор к левому краю), потом вниз.
+        val sim = pinchSim().hold(200, finger).move(0.2f, 0.5f, 300, finger).move(0.2f, 0.86f, 300, finger)
         var dock = false
         repeat(15) { sim.t += 33; dock = sim.engine.process(HandFrame(sim.t, syntheticHand(0.2f, 0.86f, finger))).dock }
         assert(dock) { "dock should be visible" }
