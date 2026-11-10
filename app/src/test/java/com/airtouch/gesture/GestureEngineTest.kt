@@ -13,7 +13,7 @@ class GestureEngineTest {
     private val fist = booleanArrayOf(false, false, false, false)
 
     private inner class Sim(cursor: Boolean = false, mode: ControlMode = ControlMode.GESTURES) {
-        val engine = GestureEngine(EngineConfig(mode = mode, cursorEnabled = cursor))
+        val engine = GestureEngine(EngineConfig(mode = mode, cursorEnabled = cursor, engageMs = 0))
         val swipes = mutableListOf<AirGesture>()
         val touches = mutableListOf<TouchEvent>()
         val actions = mutableListOf<SystemAction>()
@@ -234,6 +234,51 @@ class GestureEngineTest {
         assertEquals("Up", k.last())
     }
 
+    // ---------- «Я просто пользуюсь телефоном» ----------
+
+    @Test
+    fun handCloseToCamera_isIgnored() {
+        // Палец/рука у экрана: в кадре огромная — не жест.
+        val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH))
+        var t = 0L
+        val outs = (0 until 60).map { i ->
+            t += 33
+            e.process(HandFrame(t, syntheticHand(0.5f, 0.55f, finger, s = 0.45f, pinch = i in 30..34)))
+        }
+        assert(outs.all { it.touch == null && it.action == null }) { "near hand must do nothing" }
+        assertEquals(null, e.cursor)
+    }
+
+    @Test
+    fun handCutByFrameEdge_isIgnored() {
+        val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH))
+        var t = 0L
+        repeat(60) { i -> t += 33; e.process(HandFrame(t, syntheticHand(0.5f, 0.97f, finger, pinch = i in 30..34))) }
+        assertEquals(null, e.cursor)
+    }
+
+    @Test
+    fun handMustSettleBeforeControlling() {
+        val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH))
+        var t = 0L
+        val early = (0 until 10).map { i -> t += 33; e.process(HandFrame(t, syntheticHand(0.5f, 0.5f, finger, pinch = i in 4..7))) }
+        assert(early.all { it.touch == null }) { "first 0.5 s nothing happens" }
+        assertEquals(null, e.cursor)
+        repeat(20) { t += 33; e.process(HandFrame(t, syntheticHand(0.5f, 0.5f, finger))) }
+        assert(e.cursor != null) { "after settling cursor appears" }
+    }
+
+    @Test
+    fun touchingScreen_suppressesAirInput() {
+        val e = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0))
+        var t = 0L
+        repeat(10) { t += 33; e.process(HandFrame(t, syntheticHand(0.5f, 0.5f, finger))) }
+        e.suppressedUntil = t + 2000
+        val outs = (0 until 20).map { i -> t += 33; e.process(HandFrame(t, syntheticHand(0.5f, 0.5f, finger, pinch = i in 5..9))) }
+        assert(outs.all { it.touch == null })
+        assertEquals(null, e.cursor)
+    }
+
     @Test
     fun pinchMode_relaxedHandWithThumbOnIndex_doesNothing() {
         // Из видео: рука просто висит, большой палец лежит у указательного — это НЕ щипок.
@@ -256,9 +301,9 @@ class GestureEngineTest {
     @Test
     fun pinchMode_lowerHandToBottom_showsDock_andTapRunsAction() {
         // Опустили руку в самый низ (курсор упирается в край), подождали — панель выехала.
-        val sim = pinchSim().apply { x = 0.2f; y = 0.5f }.hold(200, finger).move(0.2f, 0.95f, 300, finger)
+        val sim = pinchSim().apply { x = 0.2f; y = 0.5f }.hold(200, finger).move(0.2f, 0.86f, 300, finger)
         var dock = false
-        repeat(15) { sim.t += 33; dock = sim.engine.process(HandFrame(sim.t, syntheticHand(0.2f, 0.95f, finger))).dock }
+        repeat(15) { sim.t += 33; dock = sim.engine.process(HandFrame(sim.t, syntheticHand(0.2f, 0.86f, finger))).dock }
         assert(dock) { "dock should be visible" }
         // Щипок на левой кнопке — «назад», без тапа по приложению.
         sim.hold(130, finger, pinch = true).hold(200, finger)

@@ -81,7 +81,7 @@ class AirPipelineTest {
     }
 
     private inner class Hand(sx: Float, sy: Float) {
-        val engine = GestureEngine(EngineConfig(mode = ControlMode.PINCH))
+        val engine = GestureEngine(EngineConfig(mode = ControlMode.PINCH, engageMs = 0, maxPalmSize = 1f))
         val touches = mutableListOf<TouchEvent>()
         var x = sx
         var y = sy

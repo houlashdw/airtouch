@@ -183,7 +183,7 @@ class AirInputService : AccessibilityService() {
             moveTo(fromX * w, fromY * h)
             lineTo(toX * w, toY * h)
         }
-        dispatchGesture(
+        markInjecting(); dispatchGesture(
             GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
                 .build(),
@@ -193,7 +193,7 @@ class AirInputService : AccessibilityService() {
 
     private fun tap(p: PointF) {
         val path = Path().apply { moveTo(p.x, p.y) }
-        dispatchGesture(
+        markInjecting(); dispatchGesture(
             GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(path, 0, TAP_MS))
                 .build(),
@@ -277,6 +277,7 @@ class AirInputService : AccessibilityService() {
         private fun send() {
             val builder = GestureDescription.Builder()
             strokes.forEach { builder.addStroke(it) }
+            markInjecting()
             val ok = dispatchGesture(
                 builder.build(),
                 object : GestureResultCallback() {
@@ -313,7 +314,7 @@ class AirInputService : AccessibilityService() {
             }
             val duration = (trailT.last() - trailT.first()).coerceIn(REPLAY_MIN_MS, REPLAY_MAX_MS)
             Stats.replays++
-            dispatchGesture(
+            markInjecting(); dispatchGesture(
                 GestureDescription.Builder()
                     .addStroke(GestureDescription.StrokeDescription(path, 0, duration))
                     .build(),
@@ -392,6 +393,11 @@ class AirInputService : AccessibilityService() {
         @Volatile var replays = 0
         override fun toString() =
             "segments ok=$segmentsCompleted cancelled=$segmentsCancelled rejected=$dispatchFailed replays=$replays"
+    }
+
+    /** Наши виртуальные касания тоже вызывают ACTION_OUTSIDE — их не считаем «пальцем на экране». */
+    private fun markInjecting() {
+        com.airtouch.core.TouchGuard.injectingUntil = android.os.SystemClock.uptimeMillis() + 600
     }
 
     companion object {

@@ -387,6 +387,7 @@ class GestureCameraService : LifecycleService() {
             if (!kbOn) keyboard?.reset()
         }
 
+        engine.suppressedUntil = com.airtouch.core.TouchGuard.quietUntil()
         val out = engine.process(frame)
         val cursor = engine.cursor
         val kb = if (kbOn && input != null) keyboardFor(input) else null

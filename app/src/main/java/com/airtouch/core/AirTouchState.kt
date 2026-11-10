@@ -87,3 +87,21 @@ object Timeouts {
     /** Средняя яркость 0..255, ниже которой предупреждаем о слабом свете. */
     const val LOW_LIGHT_LUMA = 45f
 }
+
+/**
+ * Пользователь трогает экран пальцами → воздушное управление на паузу, чтобы рука над экраном
+ * не превращалась в курсор и щипки. Наши собственные (виртуальные) касания не в счёт.
+ */
+object TouchGuard {
+    /** После настоящего касания молчим столько. */
+    const val QUIET_MS = 2000L
+
+    @Volatile var lastRealTouchAt = Long.MIN_VALUE / 2
+    @Volatile var injectingUntil = 0L
+
+    fun onOutsideTouch(now: Long) {
+        if (now > injectingUntil) lastRealTouchAt = now
+    }
+
+    fun quietUntil(): Long = lastRealTouchAt + QUIET_MS
+}

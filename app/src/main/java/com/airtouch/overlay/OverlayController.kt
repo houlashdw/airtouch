@@ -50,6 +50,17 @@ class OverlayController(private val service: AccessibilityService) {
     private var trackerView: TrackerView? = null
     private var buttonView: TextView? = null
     private var keyboardView: AirKeyboardView? = null
+    /** Окно 1×1 px, которое узнаёт о любом касании экрана пальцем (ACTION_OUTSIDE). */
+    private var touchWatcher: View? = null
+
+    private fun watcherParams() = WindowManager.LayoutParams(
+        1, 1,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+            WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+        PixelFormat.TRANSLUCENT,
+    ).apply { gravity = Gravity.TOP or Gravity.START }
     private val kbParams = WindowManager.LayoutParams(
         0, 0,
         WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -65,6 +76,15 @@ class OverlayController(private val service: AccessibilityService) {
         if (trackerView != null) return
         trackerView = TrackerView(service).also { wm.addView(it, trackerParams()) }
         buttonView = createButton().also { wm.addView(it, buttonParams) }
+        touchWatcher = View(service).also {
+            it.setOnTouchListener { _, e ->
+                if (e.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+                    com.airtouch.core.TouchGuard.onOutsideTouch(android.os.SystemClock.uptimeMillis())
+                }
+                false
+            }
+            wm.addView(it, watcherParams())
+        }
         scope.launch { AirTouchState.status.collect { render(it) } }
     }
 
@@ -74,6 +94,8 @@ class OverlayController(private val service: AccessibilityService) {
         buttonView?.let { runCatching { wm.removeView(it) } }
         keyboardView?.let { runCatching { wm.removeView(it) } }
         keyboardView = null
+        touchWatcher?.let { runCatching { wm.removeView(it) } }
+        touchWatcher = null
         trackerView = null
         buttonView = null
     }

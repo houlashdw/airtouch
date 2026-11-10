@@ -37,6 +37,12 @@ data class EngineConfig(
     val backMaxDrift: Float = 0.06f,
     /** Сколько кадров «чужой» позы терпим внутри удержания «V». */
     val poseToleranceFrames: Int = 2,
+    /** Рука ближе этого (длина ладони в долях короткой стороны кадра) — это рука у экрана, а не жест. */
+    val maxPalmSize: Float = 0.32f,
+    /** Рука должна целиком быть в кадре (с таким отступом от краёв). */
+    val edgeMargin: Float = 0.02f,
+    /** Рука должна спокойно побыть в кадре столько, прежде чем начнёт управлять. */
+    val engageMs: Long = 500,
 )
 
 data class EngineOutput(
@@ -110,9 +116,34 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         return EngineOutput(touch = up)
     }
 
+    private var validSince: Long? = null
+
+    /** Пауза снаружи: пользователь трогает экран пальцами — воздушное управление молчит. */
+    @Volatile
+    var suppressedUntil = 0L
+
+    /**
+     * Похоже ли это на жест в воздухе. Отсекаем то, что видно, когда человек просто пользуется
+     * телефоном: рука вплотную к камере (огромная), рука срезана краем кадра (палец над экраном).
+     */
+    fun isAirHand(frame: HandFrame, cfg: EngineConfig = config): Boolean {
+        if (frame.dist(Lm.WRIST, Lm.MIDDLE_MCP) > cfg.maxPalmSize) return false
+        val m = cfg.edgeMargin
+        return frame.landmarks.all { it.x in m..(1 - m) && it.y in m..(1 - m) }
+    }
+
     fun process(frame: HandFrame): EngineOutput {
         val cfg = config
         val t = frame.timestampMs
+        if (t < suppressedUntil || !isAirHand(frame, cfg)) {
+            validSince = null
+            return onHandLost()
+        }
+        val since = validSince ?: t.also { validSince = it }
+        if (t - since < cfg.engageMs) {
+            palm = frame.palmCenter
+            return EngineOutput()
+        }
         swipes.config = cfg.swipe.copy(anyPose = true)
         pointer.config = cfg.cursor
         poke.config = cfg.poke
