@@ -203,6 +203,7 @@ class AirPipelineTest {
 
     @Test
     fun systemKeyboardOpening_isDetected() {
+        com.airtouch.settings.AirTouchSettings(instr.targetContext).airKeyboard = true // по умолчанию выключена
         scenario.onActivity {
             it.edit.requestFocus()
             it.getSystemService(InputMethodManager::class.java).showSoftInput(it.edit, InputMethodManager.SHOW_IMPLICIT)
