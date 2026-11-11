@@ -63,6 +63,10 @@ object AirTouchState {
         val kbCursorVisible: Boolean = false,
         val kbPinching: Boolean = false,
         val latencyMs: Int = 0,
+        /** Телефон трясётся (ходьба) — курсор в устойчивом режиме. */
+        val unsteady: Boolean = false,
+        /** Экран повёрнут горизонтально. */
+        val landscape: Boolean = false,
         val lastAction: SystemAction? = null,
         val lastActionAt: Long = 0L,
         val lastGesture: AirGesture? = null,

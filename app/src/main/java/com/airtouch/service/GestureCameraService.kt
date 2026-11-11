@@ -12,10 +12,17 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
+import android.hardware.display.DisplayManager
 import android.os.SystemClock
+import android.view.Surface
+import android.view.WindowManager
 import android.util.Log
 import android.util.Range
 import android.util.Size
@@ -38,7 +45,10 @@ import com.airtouch.core.AirTouchState
 import com.airtouch.core.AirTouchState.Mode
 import com.airtouch.core.Timeouts
 import com.airtouch.gesture.EngineOutput
+import com.airtouch.gesture.FrameMotion
 import com.airtouch.gesture.GestureEngine
+import com.airtouch.gesture.GyroAccumulator
+import com.airtouch.gesture.WalkDetector
 import com.airtouch.gesture.inverted
 import com.airtouch.keyboard.Dictionary
 import com.airtouch.keyboard.Lang
@@ -147,9 +157,115 @@ class GestureCameraService : LifecycleService() {
 
     private val settingsDockEnterY = com.airtouch.gesture.EngineConfig().dockEnterY
 
-    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-        engine.config = settings.engineConfig()
+    // ---------------- Стабилизация: гироскоп + акселерометр ----------------
+
+    private val gyro = GyroAccumulator()
+    private val walk = WalkDetector()
+    @Volatile private var stabilize = true
+    private var sensorsOn = false
+    private val sensorListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            when (e.sensor.type) {
+                Sensor.TYPE_GYROSCOPE -> gyro.add(e.timestamp, e.values[0], e.values[1], e.values[2])
+                Sensor.TYPE_ACCELEROMETER -> walk.add(e.timestamp / 1_000_000, e.values[0], e.values[1], e.values[2])
+            }
+        }
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    private fun startSensors() {
+        if (sensorsOn || !stabilize) return
+        val sm = getSystemService(SensorManager::class.java) ?: return
+        gyro.reset()
+        walk.reset()
+        sm.getDefaultSensor(Sensor.TYPE_GYROSCOPE)?.let { sm.registerListener(sensorListener, it, SensorManager.SENSOR_DELAY_GAME) }
+        sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let { sm.registerListener(sensorListener, it, SensorManager.SENSOR_DELAY_GAME) }
+        sensorsOn = true
+    }
+
+    private fun stopSensors() {
+        if (!sensorsOn) return
+        getSystemService(SensorManager::class.java)?.unregisterListener(sensorListener)
+        sensorsOn = false
+        gyro.reset()
+        walk.reset()
+    }
+
+    /** Движение телефона с прошлого кадра — в осях кадра. Вызывать с cameraExecutor, раз в кадр. */
+    private fun frameMotion(): FrameMotion {
+        if (!stabilize || !sensorsOn) return FrameMotion.STILL
+        val (rx, ry) = GyroAccumulator.toFrameAxes(gyro.take(), displayRotation)
+        return FrameMotion(rotX = rx, rotY = ry, unsteady = walk.unsteady)
+    }
+
+    // ---------------- Ориентация экрана ----------------
+
+    @Volatile private var displayRotation = Surface.ROTATION_0
+    private var analysis: ImageAnalysis? = null
+    private val displayListener = object : DisplayManager.DisplayListener {
+        override fun onDisplayAdded(id: Int) = Unit
+        override fun onDisplayRemoved(id: Int) = Unit
+        override fun onDisplayChanged(id: Int) = applyRotation()
+    }
+    private var displayListenerOn = false
+
+    private fun currentRotation(): Int = try {
+        getSystemService(DisplayManager::class.java)?.getDisplay(android.view.Display.DEFAULT_DISPLAY)?.rotation
+            ?: Surface.ROTATION_0
+    } catch (e: Exception) {
+        Surface.ROTATION_0
+    }
+
+    /** Отношение высота/ширина экрана сейчас — курсор подстраивает скорость по осям. */
+    private fun screenAspect(): Float = try {
+        val b = getSystemService(WindowManager::class.java).currentWindowMetrics.bounds
+        b.height().toFloat() / b.width().coerceAtLeast(1)
+    } catch (e: Exception) {
+        0f
+    }
+
+    /**
+     * Экран повернули: кадр камеры поворачиваем вместе с ним (CameraX сам этого не делает для
+     * сервиса), курсору сообщаем новое соотношение сторон, незавершённые жесты сбрасываем.
+     */
+    private fun applyRotation() {
+        val rot = currentRotation()
+        val aspect = screenAspect()
+        val ec = engine.config
+        val changedAspect = ec.cursor.screenAspect != aspect
+        if (rot == displayRotation && !changedAspect) return
+        if (rot != displayRotation) Log.i(TAG, "display rotation $displayRotation -> $rot, aspect $aspect")
+        displayRotation = rot
+        analysis?.targetRotation = rot
+        engine.config = ec.copy(cursor = ec.cursor.copy(screenAspect = aspect))
+        resetRequested = true
+        val landscape = rot == Surface.ROTATION_90 || rot == Surface.ROTATION_270
+        AirTouchState.update { if (it.landscape == landscape) it else it.copy(landscape = landscape) }
+    }
+
+    private fun startDisplayListener() {
+        if (displayListenerOn) return
+        getSystemService(DisplayManager::class.java)?.registerDisplayListener(displayListener, null)
+        displayListenerOn = true
+    }
+
+    private fun stopDisplayListener() {
+        if (!displayListenerOn) return
+        getSystemService(DisplayManager::class.java)?.unregisterDisplayListener(displayListener)
+        displayListenerOn = false
+    }
+
+    private fun applySettings() {
+        val aspect = engine.config.cursor.screenAspect
+        val fresh = settings.engineConfig()
+        engine.config = fresh.copy(cursor = fresh.cursor.copy(screenAspect = aspect))
         invertSwipes = settings.invertSwipes
+        stabilize = settings.stabilize
+        if (stabilize && isRunning && !paused) startSensors() else if (!stabilize) stopSensors()
+    }
+
+    private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+        applySettings()
         AirTouchState.update { it.copy(screenLight = settings.screenLight) }
         if (key == AirTouchSettings.KEY_FRONT_CAMERA && !paused) bindCamera()
     }
@@ -229,10 +345,12 @@ class GestureCameraService : LifecycleService() {
             return
         }
 
-        engine.config = settings.engineConfig()
-        invertSwipes = settings.invertSwipes
+        applySettings()
         resetRequested = true
         settings.prefs.registerOnSharedPreferenceChangeListener(prefsListener)
+        startDisplayListener()
+        startSensors()
+        applyRotation()
         ContextCompat.registerReceiver(
             this, screenReceiver,
             IntentFilter().apply {
@@ -256,6 +374,9 @@ class GestureCameraService : LifecycleService() {
     private fun shutdown(mode: Mode, error: String? = null) {
         watchdog?.cancel()
         watchdog = null
+        stopSensors()
+        stopDisplayListener()
+        analysis = null
         settings.prefs.unregisterOnSharedPreferenceChangeListener(prefsListener)
         if (screenReceiverRegistered) {
             unregisterReceiver(screenReceiver)
@@ -301,6 +422,8 @@ class GestureCameraService : LifecycleService() {
         handVisible = false
         AirInputService.instance?.cancelTouch()
         cameraProvider?.unbindAll()
+        analysis = null
+        stopSensors()
         AirTouchState.update { it.copy(mode = Mode.PAUSED, handVisible = false, cursorVisible = false) }
     }
 
@@ -310,7 +433,9 @@ class GestureCameraService : LifecycleService() {
         economy = true // пока руки нет — экономно; появится рука — сразу полная частота
         lastHandSeenAt = SystemClock.uptimeMillis()
         AirTouchState.update { it.copy(mode = Mode.IDLE) }
+        startSensors()
         bindCamera()
+        applyRotation()
     }
 
     // ---------------- Камера ----------------
@@ -369,8 +494,12 @@ class GestureCameraService : LifecycleService() {
                 Camera2Interop.Extender(analysisBuilder)
                     .setCaptureRequestOption(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
             }
+            // Кадр — в ориентации экрана, а не датчика: в альбоме рука двигается по экрану как по кадру.
+            displayRotation = currentRotation()
+            analysisBuilder.setTargetRotation(displayRotation)
             val analysis = analysisBuilder.build()
             analysis.setAnalyzer(cameraExecutor, ::analyze)
+            this.analysis = analysis
 
             try {
                 provider.unbindAll()
@@ -403,7 +532,7 @@ class GestureCameraService : LifecycleService() {
             val gain = if (lastLuma < Timeouts.BRIGHTEN_BELOW_LUMA) {
                 (Timeouts.BRIGHTEN_TARGET_LUMA / lastLuma.coerceAtLeast(10f)).coerceIn(1f, 4f)
             } else 1f
-            t.detect(FrameUtils.brighten(raw, gain), ts)
+            t.detect(FrameUtils.brighten(raw, gain), ts, frameMotion())
         }
     }
 
@@ -496,6 +625,7 @@ class GestureCameraService : LifecycleService() {
                 holdProgress = out.hold?.progress ?: 0f,
                 fps = fps,
                 latencyMs = (now - frame.timestampMs).toInt(),
+                unsteady = engine.unsteady,
                 lastGesture = out.swipe ?: s.lastGesture,
                 lastGestureAt = if (out.swipe != null) now else s.lastGestureAt,
                 lastAction = out.action ?: s.lastAction,

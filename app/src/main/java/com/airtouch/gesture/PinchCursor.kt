@@ -59,6 +59,22 @@ data class CursorConfig(
     val fastSpeed: Float = 5f,
     /** Экран высокий — по вертикали курсор едет медленнее, чтобы движение ощущалось одинаково. */
     val verticalGain: Float = 0.55f,
+    /**
+     * Высота экрана / ширина. 0 — неизвестно (берётся [verticalGain], как для телефона 9:19.5).
+     * Задано — коэффициенты по осям считаются сами: длинная ось всегда медленнее, чтобы одно и то же
+     * движение руки проезжало одинаковую долю экрана и в портрете, и в альбоме.
+     */
+    val screenAspect: Float = 0f,
+    /** Телефон трясётся (ходьба): мёртвая зона и порог «рука стояла» во столько раз больше… */
+    val unsteadyDeadZoneMul: Float = 2.5f,
+    val unsteadyStillMul: Float = 1.6f,
+    /** …сглаживание сильнее: частота среза One Euro ниже и меньше растёт со скоростью… */
+    val unsteadyMinCutoff: Float = 0.25f,
+    val unsteadyBeta: Float = 0.5f,
+    /** …и щипок должен продержаться на кадр дольше. */
+    val unsteadyDebounceExtra: Int = 1,
+    /** Вычитать поворот телефона (гироскоп) из движения руки. */
+    val shakeCompensation: Boolean = true,
     /** Микродвижения меньше этой доли ладони за кадр — дрожание, курсор стоит. */
     val deadZonePalm: Float = 0.015f,
     /** Ниже этой линии экрана (открыта обычная клавиатура) курсор медленнее — чтобы попадать в клавиши. */
@@ -81,8 +97,12 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     private enum class Touch { NONE, PENDING, DRAGGING }
 
     // Сглаживание сильнее, чем у махов: курсору важна точность, а не мгновенность.
-    private val fx = OneEuroFilter(minCutoff = 0.6f, beta = 2.5f)
-    private val fy = OneEuroFilter(minCutoff = 0.6f, beta = 2.5f)
+    private val fx = OneEuroFilter(minCutoff = STEADY_CUTOFF, beta = STEADY_BETA)
+    private val fy = OneEuroFilter(minCutoff = STEADY_CUTOFF, beta = STEADY_BETA)
+    private val shake = ShakeCompensator()
+    /** Телефон трясся на последнем кадре (для индикации). */
+    var unsteady = false
+        private set
     private var lastOpenAt = Long.MIN_VALUE / 2
     /** Щипок «из ниоткуда» (пальцы не разводили) — игнорируем до разжатия. */
     private var ignoring = false
@@ -132,6 +152,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
         flipFrames = 0
         fx.reset()
         fy.reset()
+        shake.reset()
         trail.clear()
         vtrail.clear()
         rawPrev = null
@@ -145,12 +166,23 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     fun process(frame: HandFrame): TouchEvent? {
         val cfg = config
         val t = frame.timestampMs
+        val motion = frame.motion
+        unsteady = motion.unsteady
+        val deadZone = if (unsteady) cfg.deadZonePalm * cfg.unsteadyDeadZoneMul else cfg.deadZonePalm
+        val stillForTap = if (unsteady) cfg.stillForTap * cfg.unsteadyStillMul else cfg.stillForTap
+        val dragStart = if (unsteady) cfg.dragStartDistance * cfg.unsteadyStillMul else cfg.dragStartDistance
+        val debounce = if (unsteady) cfg.debounceFrames + cfg.unsteadyDebounceExtra else cfg.debounceFrames
+        val cutoff = if (unsteady) cfg.unsteadyMinCutoff else STEADY_CUTOFF
+        val beta = if (unsteady) cfg.unsteadyBeta else STEADY_BETA
+        fx.minCutoff = cutoff; fx.beta = beta
+        fy.minCutoff = cutoff; fy.beta = beta
+        val (gainX, gainY) = axisGains(cfg)
 
         val ratio = pinchRatio(frame)
         if (ratio >= cfg.openRatio) lastOpenAt = t
         val wantPinched = if (pinched) ratio < cfg.pinchOff else ratio < cfg.pinchOn
         if (wantPinched != pinched) {
-            if (++flipFrames >= cfg.debounceFrames) {
+            if (++flipFrames >= debounce) {
                 pinched = wantPinched
                 flipFrames = 0
             }
@@ -175,8 +207,16 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
             val ry = my * frame.yScale
             val lr = lastRaw
             if (lr != null) {
-                val ddx = (rx - lr.first) / palm
-                val ddy = (ry - lr.second) / palm
+                var mdx = rx - lr.first
+                var mdy = ry - lr.second
+                if (cfg.shakeCompensation) {
+                    // Тряска телефона: поворот камеры сдвигает ВСЮ картинку вместе с рукой — вычитаем.
+                    val (cx, cy) = shake.compensate(mdx, mdy, motion.rotX, motion.rotY)
+                    mdx = cx
+                    mdy = cy
+                }
+                val ddx = mdx / palm
+                val ddy = mdy / palm
                 if (hypot(ddx, ddy) <= 1.5f) { accX += ddx; accY += ddy } // больше — сбой трекинга
             }
             lastRaw = rx to ry
@@ -187,16 +227,16 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                 var dx = fxv - prev.first
                 var dy = fyv - prev.second
                 val dist = hypot(dx, dy)
-                if (dist > 1.5f || dist < cfg.deadZonePalm) { dx = 0f; dy = 0f } // сбой трекинга / дрожание
+                if (dist > 1.5f || dist < deadZone) { dx = 0f; dy = 0f } // сбой трекинга / дрожание
                 val dt = (t - relPrevT).coerceAtLeast(1L) / 1000f
                 val k = ((dist / dt) / cfg.fastSpeed).coerceIn(0f, 1f)
                 val gain = (cfg.gainSlow + (cfg.gainFast - cfg.gainSlow) * k) *
                     if (relY >= cfg.precisionTop) cfg.precisionGain else 1f
-                relX = (relX + dx * gain).coerceIn(0f, 1f)
-                relY = (relY + dy * gain * cfg.verticalGain).coerceIn(0f, 1f)
-                virtX += dx * gain
-                virtY += dy * gain * cfg.verticalGain
-                if (relY >= 0.999f && dy > 0) bottomPush += dy * gain * cfg.verticalGain
+                relX = (relX + dx * gain * gainX).coerceIn(0f, 1f)
+                relY = (relY + dy * gain * gainY).coerceIn(0f, 1f)
+                virtX += dx * gain * gainX
+                virtY += dy * gain * gainY
+                if (relY >= 0.999f && dy > 0) bottomPush += dy * gain * gainY
                 else if (relY < 0.98f) bottomPush = 0f
             }
             relPrev = fxv to fyv
@@ -235,7 +275,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     val before = trail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: trail.first()
                     downX = before.second
                     downY = before.third
-                    movingAtPinch = vtrail.filter { t - it.first <= 250 }.any { hypot(it.second - virtX, it.third - virtY) > cfg.stillForTap }
+                    movingAtPinch = vtrail.filter { t - it.first <= 250 }.any { hypot(it.second - virtX, it.third - virtY) > stillForTap }
                     val vb = vtrail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: vtrail.first()
                     virtAtDownX = vb.second
                     virtAtDownY = vb.third
@@ -247,7 +287,7 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     touch = Touch.NONE
                     if (movingAtPinch) null else TouchEvent.Tap(downX, downY)
                 }
-                hypot(virtX - virtAtDownX, virtY - virtAtDownY) > cfg.dragStartDistance -> {
+                hypot(virtX - virtAtDownX, virtY - virtAtDownY) > dragStart -> {
                     lastDrag = downX to downY
                     touch = Touch.DRAGGING
                     TouchEvent.Down(downX, downY)
@@ -277,6 +317,19 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
 
     companion object {
         private const val PINCH_LOOKBACK_MS = 120L
+        private const val STEADY_CUTOFF = 0.6f
+        private const val STEADY_BETA = 2.5f
+
+        /**
+         * Множители скорости курсора по осям экрана. Длинная сторона медленнее: для 9:19.5 это
+         * привычные 1 × 0.55, для альбома 19.5:9 — 0.55 × 1, для квадрата — 1 × 1.
+         */
+        fun axisGains(cfg: CursorConfig): Pair<Float, Float> {
+            val a = cfg.screenAspect
+            if (a <= 0f) return 1f to cfg.verticalGain
+            val slow = { ratio: Float -> (1.2f / ratio).coerceIn(0.45f, 1f) }
+            return if (a >= 1f) 1f to slow(a) else slow(1f / a) to 1f
+        }
 
         /** Расстояние между кончиками большого и указательного относительно длины ладони. */
         fun pinchRatio(frame: HandFrame): Float =
@@ -297,8 +350,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
  * движении — стандарт для курсоров по трекингу.
  */
 class OneEuroFilter(
-    private val minCutoff: Float = 1.2f,
-    private val beta: Float = 4f,
+    @Volatile var minCutoff: Float = 1.2f,
+    @Volatile var beta: Float = 4f,
     private val dCutoff: Float = 1f,
 ) {
     private var prev: Float? = null

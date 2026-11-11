@@ -104,6 +104,9 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
     /** Курсор, если сейчас курсорный режим, иначе null. */
     val cursor: Cursor? get() = if (cursorMode) pointer.cursor else null
 
+    /** Курсор работает в устойчивом режиме (телефон трясётся — ходьба). */
+    val unsteady: Boolean get() = pointer.unsteady
+
     /** Первый кадр без руки: если это был резкий мах за край кадра — засчитать. */
     fun onHandMissing(t: Long): EngineOutput =
         if (!cursorMode) EngineOutput(swipe = swipes.checkExitFlick(t)) else EngineOutput()

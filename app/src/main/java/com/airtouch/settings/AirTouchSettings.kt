@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.core.content.edit
 import com.airtouch.gesture.ActivationZone
 import com.airtouch.gesture.ControlMode
+import com.airtouch.gesture.CursorConfig
 import com.airtouch.gesture.EngineConfig
 import com.airtouch.gesture.SwipeConfig
 
@@ -50,12 +51,20 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_AIR_KEYBOARD, false)
         set(v) = prefs.edit { putBoolean(KEY_AIR_KEYBOARD, v) }
 
+    /** Стабилизация при ходьбе: гироскоп вычитает тряску телефона, акселерометр включает устойчивый режим. */
+    var stabilize: Boolean
+        get() = prefs.getBoolean(KEY_STABILIZE, true)
+        set(v) = prefs.edit { putBoolean(KEY_STABILIZE, v) }
+
     var invertSwipes: Boolean
         get() = prefs.getBoolean(KEY_INVERT, false)
         set(v) = prefs.edit { putBoolean(KEY_INVERT, v) }
 
     fun engineConfig(): EngineConfig =
-        EngineConfig(mode = controlMode, swipe = swipeConfig(), cursorEnabled = cursorEnabled)
+        EngineConfig(
+            mode = controlMode, swipe = swipeConfig(), cursorEnabled = cursorEnabled,
+            cursor = CursorConfig(shakeCompensation = stabilize),
+        )
 
     fun swipeConfig(): SwipeConfig = SwipeConfig(
         sensitivity = sensitivity,
@@ -76,5 +85,6 @@ class AirTouchSettings(context: Context) {
         const val KEY_AIR_KEYBOARD = "air_keyboard"
         const val KEY_MODE = "control_mode"
         const val KEY_SCREEN_LIGHT = "screen_light"
+        const val KEY_STABILIZE = "stabilize"
     }
 }

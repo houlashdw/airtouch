@@ -3,8 +3,10 @@ package com.airtouch.vision
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
+import com.airtouch.gesture.FrameMotion
 import com.airtouch.gesture.HandFrame
 import com.airtouch.gesture.Landmark
+import java.util.concurrent.ConcurrentHashMap
 import com.google.mediapipe.framework.image.BitmapImageBuilder
 import com.google.mediapipe.framework.image.MPImage
 import com.google.mediapipe.tasks.core.BaseOptions
@@ -57,13 +59,21 @@ class HandTracker(
         return GestureRecognizer.createFromOptions(context, options)
     }
 
+    /** Движение телефона на кадре, по метке времени: кладём при отправке, забираем с результатом. */
+    private val motions = ConcurrentHashMap<Long, FrameMotion>()
+
     /** timestampMs должен строго возрастать — это требование LIVE_STREAM. */
-    fun detect(bitmap: Bitmap, timestampMs: Long) {
+    fun detect(bitmap: Bitmap, timestampMs: Long, motion: FrameMotion = FrameMotion.STILL) {
+        if (motion !== FrameMotion.STILL) {
+            motions[timestampMs] = motion
+            if (motions.size > 64) motions.keys.filter { it < timestampMs - 2000 }.forEach { motions.remove(it) }
+        }
         recognizer.recognizeAsync(BitmapImageBuilder(bitmap).build(), timestampMs)
     }
 
     private fun handle(result: GestureRecognizerResult, image: MPImage) {
         val hands = result.landmarks()
+        val motion = motions.remove(result.timestampMs()) ?: FrameMotion.STILL
         if (hands.isEmpty()) {
             onResult(null)
             return
@@ -78,6 +88,7 @@ class HandTracker(
                 imageHeight = image.height,
                 label = top?.categoryName(),
                 labelScore = top?.score() ?: 0f,
+                motion = motion,
             ),
         )
     }

@@ -135,7 +135,9 @@ private fun AirTouchScreen() {
 
             if (status.isRunning && status.fps > 0) {
                 Text(
-                    "${status.fps} кадров/с" + if (status.lowLight) " · темно — подсвечиваю" else "",
+                    "${status.fps} кадров/с" + (if (status.lowLight) " · темно — подсвечиваю" else "") +
+                        (if (status.unsteady) " · тряска: устойчивый режим" else "") +
+                        (if (status.landscape) " · альбом" else ""),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -282,6 +284,7 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
     var invert by remember { mutableStateOf(settings.invertSwipes) }
     var airKeyboard by remember { mutableStateOf(settings.airKeyboard) }
     var screenLight by remember { mutableStateOf(settings.screenLight) }
+    var stabilize by remember { mutableStateOf(settings.stabilize) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -293,6 +296,13 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
                     "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
+
+            SwitchRow(
+                title = "Стабилизация при ходьбе",
+                subtitle = "Гироскоп вычитает тряску телефона из движения руки, а когда вы идёте, " +
+                    "курсор переходит в устойчивый режим: сильнее сглаживание, больше мёртвая зона.",
+                checked = stabilize,
+            ) { stabilize = it; settings.stabilize = it }
 
             SwitchRow(
                 title = "Подсветка в темноте",
