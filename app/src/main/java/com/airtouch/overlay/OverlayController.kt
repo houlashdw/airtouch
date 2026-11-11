@@ -244,6 +244,8 @@ private class TrackerView(context: Context) : View(context) {
     private var havePalm = false
     private var lastFrameNs = 0L
     private var animating = false
+    /** Когда курсор последний раз двигался (невидимка прячет стрелку в покое). */
+    private var lastMoveAt = 0L
     private val frameCallback = object : android.view.Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
             animating = false
@@ -258,6 +260,7 @@ private class TrackerView(context: Context) : View(context) {
                 val ddy = s.cursorY - drawCy
                 drawCx += ddx * k
                 drawCy += ddy * k
+                if (hypot(ddx, ddy) > 0.0015f) lastMoveAt = SystemClock.uptimeMillis()
                 moving = moving || hypot(ddx, ddy) > 0.0005f
             } else haveCursor = false
             if (s.handVisible) {
@@ -269,8 +272,52 @@ private class TrackerView(context: Context) : View(context) {
                 moving = moving || hypot(ddx, ddy) > 0.0005f
             } else havePalm = false
             invalidate()
-            if (moving && s.mode == Mode.ACTIVE && s.handVisible) schedule()
+            val fading = s.stealth && s.cursorVisible && SystemClock.uptimeMillis() - lastMoveAt < HIDE_MS + FADE_MS
+            if ((moving || fading) && s.mode == Mode.ACTIVE && s.handVisible) schedule()
         }
+    }
+
+    // Невидимка: стрелка как у системного указателя мыши + кружок касания как в «Показывать нажатия».
+    private val arrowPath = Path()
+    private val arrowFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+    private val arrowStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 1.2f * d; strokeJoin = Paint.Join.ROUND; color = 0xFF000000.toInt()
+    }
+    private val tapRing = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE; strokeWidth = 1.5f * d; color = 0x66FFFFFF
+    }
+    private val tapFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x33000000 }
+
+    /** Стрелка исчезает через [HIDE_MS] покоя за [FADE_MS]; при щипке видна всегда. */
+    private fun drawStealthPointer(canvas: Canvas, s: AirTouchState.Status) {
+        val cx = (if (haveCursor) drawCx else s.cursorX) * width
+        val cy = (if (haveCursor) drawCy else s.cursorY) * height
+        val idle = SystemClock.uptimeMillis() - lastMoveAt
+        val alpha = when {
+            s.pinching -> 1f
+            idle < HIDE_MS -> 1f
+            idle < HIDE_MS + FADE_MS -> 1f - (idle - HIDE_MS) / FADE_MS.toFloat()
+            else -> 0f
+        }
+        if (alpha <= 0f) return
+        if (s.pinching) {
+            canvas.drawCircle(cx, cy, 14 * d, tapFill)
+            canvas.drawCircle(cx, cy, 14 * d, tapRing)
+        }
+        val u = 1.15f * d
+        arrowPath.rewind()
+        arrowPath.moveTo(cx, cy)
+        arrowPath.lineTo(cx, cy + 17 * u)
+        arrowPath.lineTo(cx + 4 * u, cy + 13 * u)
+        arrowPath.lineTo(cx + 7 * u, cy + 20 * u)
+        arrowPath.lineTo(cx + 10 * u, cy + 18.5f * u)
+        arrowPath.lineTo(cx + 7 * u, cy + 12 * u)
+        arrowPath.lineTo(cx + 12.5f * u, cy + 12 * u)
+        arrowPath.close()
+        arrowFill.alpha = (255 * alpha).toInt()
+        arrowStroke.alpha = (255 * alpha).toInt()
+        canvas.drawPath(arrowPath, arrowFill)
+        canvas.drawPath(arrowPath, arrowStroke)
     }
 
     private fun schedule() {
@@ -337,8 +384,10 @@ private class TrackerView(context: Context) : View(context) {
         val s = status
 
         if (s.stealth) {
-            // Невидимый режим: только то, без чего не обойтись, — панель кнопок под щипок.
-            if (s.mode == Mode.ACTIVE && s.handVisible && s.dockVisible && !s.keyboardVisible) drawDock(canvas, s)
+            // Невидимка: ни точки, ни вспышек. Только системная стрелка (прячется в покое) и панель кнопок.
+            if (s.mode != Mode.ACTIVE || !s.handVisible || s.keyboardVisible) return
+            if (s.dockVisible) drawDock(canvas, s)
+            if (s.cursorVisible) drawStealthPointer(canvas, s)
             return
         }
 
@@ -459,6 +508,9 @@ private class TrackerView(context: Context) : View(context) {
         const val ACTION_FLASH_MS = 700L
         /** Постоянная времени «догоняющего» курсора: 45 мс — заметно плавнее, задержка почти не ощущается. */
         const val SMOOTH_MS = 45f
+        /** Невидимка: стрелка прячется через секунду покоя и растворяется за 350 мс. */
+        const val HIDE_MS = 1000L
+        const val FADE_MS = 350L
         /** Совпадает с EngineConfig.dockTop. */
         const val DOCK_TOP = 0.84f
     }
