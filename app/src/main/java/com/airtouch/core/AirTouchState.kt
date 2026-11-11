@@ -34,6 +34,8 @@ object AirTouchState {
         val lowLight: Boolean = false,
         /** Подсвечивать руку светлой рамкой экрана в темноте. */
         val screenLight: Boolean = true,
+        /** Невидимый режим: оверлей ничего не рисует, кроме панели кнопок и клавиатуры. */
+        val stealth: Boolean = false,
         /** Что сейчас видит камера — для подсказки в приложении. */
         val pose: HandPose? = null,
         /** Курсор (режим курсора), доли экрана. */

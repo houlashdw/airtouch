@@ -4,6 +4,7 @@
     <string name="accessibility_label">AirTouch — жесты в воздухе</string>
     <string name="accessibility_description">AirTouch распознаёт жесты руки через камеру прямо на устройстве и превращает их в свайпы и кнопку «Назад». Изображение с камеры никуда не отправляется. Воздушная клавиатура вписывает текст в поле ввода, где стоит курсор; содержимое экрана никуда не передаётся.</string>
     <string name="notif_channel">Режим жестов</string>
+    <string name="notif_channel_quiet">Режим жестов (тихо)</string>
     <string name="notif_title">AirTouch: камера следит за жестами</string>
     <string name="notif_text">Камера обрабатывается только на устройстве. Нажмите «Стоп», чтобы выключить.</string>
     <string name="notif_stop">Стоп</string>

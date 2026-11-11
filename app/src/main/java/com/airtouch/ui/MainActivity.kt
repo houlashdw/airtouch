@@ -285,6 +285,8 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
     var airKeyboard by remember { mutableStateOf(settings.airKeyboard) }
     var screenLight by remember { mutableStateOf(settings.screenLight) }
     var stabilize by remember { mutableStateOf(settings.stabilize) }
+    var stealth by remember { mutableStateOf(settings.stealth) }
+    var quietNotif by remember { mutableStateOf(settings.quietNotification) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -296,6 +298,20 @@ private fun SettingsCard(settings: AirTouchSettings, mode: ControlMode) {
                     "щипок и держать — долгое нажатие. Пока включено, палец не машет — машите ладонью.",
                 checked = cursor,
             ) { cursor = it; settings.cursorEnabled = it }
+
+            SwitchRow(
+                title = "Невидимый режим",
+                subtitle = "Ни плавающей кнопки, ни точки, ни курсора, ни вспышек — как будто телефон слушается сам. " +
+                    "Остаётся только панель «Назад / Домой», когда опускаете руку к низу. Включать и выключать — здесь или из уведомления.",
+                checked = stealth,
+            ) { stealth = it; settings.stealth = it }
+
+            SwitchRow(
+                title = "Тихое уведомление",
+                subtitle = "Уведомление о камере свёрнуто в одну строку внизу шторки и без значка в строке состояния " +
+                    "(совсем убрать его Android не разрешает: камера работает в фоне).",
+                checked = quietNotif,
+            ) { quietNotif = it; settings.quietNotification = it }
 
             SwitchRow(
                 title = "Стабилизация при ходьбе",

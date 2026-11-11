@@ -266,8 +266,11 @@ class GestureCameraService : LifecycleService() {
 
     private val prefsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
         applySettings()
-        AirTouchState.update { it.copy(screenLight = settings.screenLight) }
+        AirTouchState.update { it.copy(screenLight = settings.screenLight, stealth = settings.stealth) }
         if (key == AirTouchSettings.KEY_FRONT_CAMERA && !paused) bindCamera()
+        if (key == AirTouchSettings.KEY_QUIET_NOTIF && isRunning) {
+            runCatching { getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification()) }
+        }
     }
 
     private val screenReceiver = object : BroadcastReceiver() {
@@ -365,7 +368,7 @@ class GestureCameraService : LifecycleService() {
         paused = false
         economy = false
         handVisible = false
-        AirTouchState.update { AirTouchState.Status(mode = Mode.ACTIVE, screenLight = settings.screenLight) }
+        AirTouchState.update { AirTouchState.Status(mode = Mode.ACTIVE, screenLight = settings.screenLight, stealth = settings.stealth) }
 
         bindCamera()
         startWatchdog()
@@ -667,8 +670,15 @@ class GestureCameraService : LifecycleService() {
     // ---------------- Уведомление ----------------
 
     private fun buildNotification(): Notification {
+        val quiet = ::settings.isInitialized && settings.quietNotification
+        // Важность канала нельзя понизить после создания — для тихого режима отдельный канал.
+        val channel = if (quiet) CHANNEL_QUIET else CHANNEL_ID
         getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, getString(R.string.notif_channel), NotificationManager.IMPORTANCE_LOW),
+            NotificationChannel(
+                channel,
+                if (quiet) getString(R.string.notif_channel_quiet) else getString(R.string.notif_channel),
+                if (quiet) NotificationManager.IMPORTANCE_MIN else NotificationManager.IMPORTANCE_LOW,
+            ).apply { setShowBadge(false) },
         )
         val stop = PendingIntent.getService(
             this, 1, Intent(this, GestureCameraService::class.java).setAction(ACTION_STOP),
@@ -677,11 +687,15 @@ class GestureCameraService : LifecycleService() {
         val open = PendingIntent.getActivity(
             this, 2, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
         )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, channel)
             .setSmallIcon(R.drawable.ic_stat_hand)
             .setContentTitle(getString(R.string.notif_title))
             .setContentText(getString(R.string.notif_text))
             .setOngoing(true)
+            .setSilent(true)
+            .setShowWhen(false)
+            .setPriority(if (quiet) NotificationCompat.PRIORITY_MIN else NotificationCompat.PRIORITY_LOW)
+            .setVisibility(if (quiet) NotificationCompat.VISIBILITY_SECRET else NotificationCompat.VISIBILITY_PRIVATE)
             .setContentIntent(open)
             .addAction(0, getString(R.string.notif_stop), stop)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
@@ -693,6 +707,7 @@ class GestureCameraService : LifecycleService() {
         const val ACTION_START = "com.airtouch.action.START"
         const val ACTION_STOP = "com.airtouch.action.STOP"
         private const val CHANNEL_ID = "air_mode"
+        private const val CHANNEL_QUIET = "air_mode_quiet"
         private const val NOTIFICATION_ID = 42
         private const val DARK_EXPOSURE_NS = 50_000_000L
 

@@ -99,6 +99,8 @@ class OverlayController(private val service: AccessibilityService) {
     }
 
     private fun render(status: AirTouchState.Status) {
+        // Невидимый режим: плавающей кнопки нет, включать/выключать — из приложения или уведомления.
+        buttonView?.visibility = if (status.stealth) View.GONE else View.VISIBLE
         (buttonView?.background as? GradientDrawable)?.setColor(
             when (status.mode) {
                 Mode.OFF -> 0x66303338
@@ -220,11 +222,62 @@ class OverlayController(private val service: AccessibilityService) {
     }
 }
 
-/** Курсор, точка-трекер ладони, вспышка при свайпе и плашка «мало света». */
+/**
+ * Курсор, точка-трекер ладони, вспышка при свайпе и плашка «мало света».
+ *
+ * Положение курсора приходит с частотой камеры (~30 к/с) и с задержкой распознавания, поэтому
+ * рисуем не его напрямую, а «догоняющую» точку: на каждом кадре экрана (60–120 Гц) она
+ * подтягивается к цели по экспоненте с постоянной времени [SMOOTH_MS]. Глазу это выглядит
+ * как плавное движение вместо прыжков раз в 33 мс; реакция на щипок при этом мгновенная.
+ */
 private class TrackerView(context: Context) : View(context) {
 
     private val d = resources.displayMetrics.density
     private var status = AirTouchState.Status()
+
+    // Отрисовываемое (сглаженное) положение курсора и точки-трекера, доли экрана.
+    private var drawCx = 0.5f
+    private var drawCy = 0.5f
+    private var drawPx = 0.5f
+    private var drawPy = 0.5f
+    private var haveCursor = false
+    private var havePalm = false
+    private var lastFrameNs = 0L
+    private var animating = false
+    private val frameCallback = object : android.view.Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            animating = false
+            val dt = if (lastFrameNs == 0L) 16f else ((frameTimeNanos - lastFrameNs) / 1e6f).coerceIn(1f, 100f)
+            lastFrameNs = frameTimeNanos
+            val s = status
+            val k = 1f - Math.exp(-dt / SMOOTH_MS.toDouble()).toFloat()
+            var moving = false
+            if (s.cursorVisible) {
+                if (!haveCursor) { drawCx = s.cursorX; drawCy = s.cursorY; haveCursor = true }
+                val ddx = s.cursorX - drawCx
+                val ddy = s.cursorY - drawCy
+                drawCx += ddx * k
+                drawCy += ddy * k
+                moving = moving || hypot(ddx, ddy) > 0.0005f
+            } else haveCursor = false
+            if (s.handVisible) {
+                if (!havePalm) { drawPx = s.palmX; drawPy = s.palmY; havePalm = true }
+                val ddx = s.palmX - drawPx
+                val ddy = s.palmY - drawPy
+                drawPx += ddx * k
+                drawPy += ddy * k
+                moving = moving || hypot(ddx, ddy) > 0.0005f
+            } else havePalm = false
+            invalidate()
+            if (moving && s.mode == Mode.ACTIVE && s.handVisible) schedule()
+        }
+    }
+
+    private fun schedule() {
+        if (animating) return
+        animating = true
+        android.view.Choreographer.getInstance().postFrameCallback(frameCallback)
+    }
 
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xCC22C55E.toInt() }
     private val ringPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -277,11 +330,17 @@ private class TrackerView(context: Context) : View(context) {
 
     fun update(s: AirTouchState.Status) {
         status = s
-        invalidate()
+        if (s.mode == Mode.ACTIVE && s.handVisible && !s.stealth) schedule() else { lastFrameNs = 0L; invalidate() }
     }
 
     override fun onDraw(canvas: Canvas) {
         val s = status
+
+        if (s.stealth) {
+            // Невидимый режим: только то, без чего не обойтись, — панель кнопок под щипок.
+            if (s.mode == Mode.ACTIVE && s.handVisible && s.dockVisible && !s.keyboardVisible) drawDock(canvas, s)
+            return
+        }
 
         // Темно — светлая рамка по краям экрана подсвечивает руку (как вспышка для селфи).
         if (s.isRunning && s.lowLight && s.screenLight && !s.keyboardVisible) {
@@ -311,8 +370,8 @@ private class TrackerView(context: Context) : View(context) {
 
         if (s.mode != Mode.ACTIVE || !s.handVisible) return
 
-        val px = s.palmX * width
-        val py = s.palmY * height
+        val px = (if (havePalm) drawPx else s.palmX) * width
+        val py = (if (havePalm) drawPy else s.palmY) * height
 
         // Кольцо удержания позы.
         if (s.holdAction != null) {
@@ -330,16 +389,16 @@ private class TrackerView(context: Context) : View(context) {
         if (s.dockVisible) drawDock(canvas, s)
 
         if (s.cursorVisible) {
-            val cx = s.cursorX * width
-            val cy = s.cursorY * height
+            val cx = (if (haveCursor) drawCx else s.cursorX) * width
+            val cy = (if (haveCursor) drawCy else s.cursorY) * height
             val r = if (s.pinching) 4.5f * d else 6.5f * d
             canvas.drawCircle(cx, cy, r, if (s.pinching) cursorPressed else cursorFill)
             canvas.drawCircle(cx, cy, r, cursorRing)
             return
         }
 
-        val x = s.palmX * width
-        val y = s.palmY * height
+        val x = px
+        val y = py
 
         val age = SystemClock.uptimeMillis() - s.lastGestureAt
         if (s.lastGesture != null && age in 0 until FLASH_MS) {
@@ -398,6 +457,8 @@ private class TrackerView(context: Context) : View(context) {
     private companion object {
         const val FLASH_MS = 350L
         const val ACTION_FLASH_MS = 700L
+        /** Постоянная времени «догоняющего» курсора: 45 мс — заметно плавнее, задержка почти не ощущается. */
+        const val SMOOTH_MS = 45f
         /** Совпадает с EngineConfig.dockTop. */
         const val DOCK_TOP = 0.84f
     }

@@ -56,6 +56,16 @@ class AirTouchSettings(context: Context) {
         get() = prefs.getBoolean(KEY_STABILIZE, true)
         set(v) = prefs.edit { putBoolean(KEY_STABILIZE, v) }
 
+    /** Невидимый режим: без плавающей кнопки, точки, курсора и вспышек — как будто телефон сам. */
+    var stealth: Boolean
+        get() = prefs.getBoolean(KEY_STEALTH, false)
+        set(v) = prefs.edit { putBoolean(KEY_STEALTH, v) }
+
+    /** Уведомление свёрнуто и без значка в строке состояния (насколько позволяет система). */
+    var quietNotification: Boolean
+        get() = prefs.getBoolean(KEY_QUIET_NOTIF, false)
+        set(v) = prefs.edit { putBoolean(KEY_QUIET_NOTIF, v) }
+
     var invertSwipes: Boolean
         get() = prefs.getBoolean(KEY_INVERT, false)
         set(v) = prefs.edit { putBoolean(KEY_INVERT, v) }
@@ -86,5 +96,7 @@ class AirTouchSettings(context: Context) {
         const val KEY_MODE = "control_mode"
         const val KEY_SCREEN_LIGHT = "screen_light"
         const val KEY_STABILIZE = "stabilize"
+        const val KEY_STEALTH = "stealth"
+        const val KEY_QUIET_NOTIF = "quiet_notification"
     }
 }
