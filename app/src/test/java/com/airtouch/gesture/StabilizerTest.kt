@@ -181,3 +181,30 @@ class StabilizerTest {
         assertTrue("landscape x must be slower: $landscape vs $portrait", landscape < portrait * 0.75f && landscape > 0f)
     }
 }
+
+class QuickTapTest {
+    /** Рука ехала к цели и щипнула, не остановившись полностью, — клик всё равно должен пройти. */
+    @Test
+    fun tapWhileAiming_isNotLost() {
+        val cursor = PinchCursor(CursorConfig())
+        var t = 0L
+        var tap: TouchEvent.Tap? = null
+        // Разведённые пальцы, рука плывёт к цели.
+        for (i in 0 until 20) {
+            t += 33
+            cursor.process(HandFrame(t, syntheticHand(0.3f + i * 0.0025f, 0.5f, s = 0.15f), 480, 640))
+        }
+        // Щипок на 4 кадра (≈130 мс), рука ещё едва движется.
+        for (i in 0 until 4) {
+            t += 33
+            val e = cursor.process(HandFrame(t, syntheticHand(0.35f + i * 0.0008f, 0.5f, s = 0.15f, pinch = true), 480, 640))
+            if (e is TouchEvent.Tap) tap = e
+        }
+        for (i in 0 until 4) {
+            t += 33
+            val e = cursor.process(HandFrame(t, syntheticHand(0.353f, 0.5f, s = 0.15f), 480, 640))
+            if (e is TouchEvent.Tap) tap = e
+        }
+        assertTrue("quick pinch while slowly moving must be a tap", tap != null)
+    }
+}

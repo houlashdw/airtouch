@@ -20,11 +20,20 @@ data class Cursor(val x: Float, val y: Float, val pinching: Boolean)
 
 data class CursorConfig(
     /** Щипок: расстояние большой–указательный / длина ладони меньше этого… */
-    val pinchOn: Float = 0.25f,
+    val pinchOn: Float = 0.30f,
     /** …и отпускание — больше этого (гистерезис, чтобы не дребезжало). */
-    val pinchOff: Float = 0.40f,
-    /** Сколько кадров подряд нужно, чтобы поверить в смену щипка. */
-    val debounceFrames: Int = 3,
+    val pinchOff: Float = 0.42f,
+    /** Сколько кадров подряд нужно, чтобы поверить в смену щипка (2 ≈ 65 мс: клик отзывчивый). */
+    val debounceFrames: Int = 2,
+    /** Щипок короче этого и почти без движения — тап, даже если рука перед ним шевелилась. */
+    val tapMaxMs: Long = 450,
+    /**
+     * Первые миллисекунды после щипка перетаскивание начинается только с [dragGraceMul]-кратного
+     * сдвига: сглаживание ещё «доезжает» после прицеливания, и без этого клик превращался в
+     * микроскопическое перетаскивание, которое приложение не считает нажатием.
+     */
+    val dragGraceMs: Long = 160,
+    val dragGraceMul: Float = 2.5f,
     /**
      * Щипок засчитывается, только если перед ним пальцы были явно разведены (не дальше этого по времени).
      * Расслабленная рука, где большой палец просто лежит у указательного, щипком не считается.
@@ -275,6 +284,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
                     val before = trail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: trail.first()
                     downX = before.second
                     downY = before.third
+                    // Рука ехала перед щипком (прицеливание на ходу) — это ещё не повод терять клик:
+                    // тап решается по движению ВО ВРЕМЯ щипка. Здесь — только защита от долгого нажатия.
                     movingAtPinch = vtrail.filter { t - it.first <= 250 }.any { hypot(it.second - virtX, it.third - virtY) > stillForTap }
                     val vb = vtrail.lastOrNull { t - it.first >= PINCH_LOOKBACK_MS } ?: vtrail.first()
                     virtAtDownX = vb.second
@@ -285,9 +296,14 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
             Touch.PENDING -> when {
                 !pinched -> {
                     touch = Touch.NONE
-                    if (movingAtPinch) null else TouchEvent.Tap(downX, downY)
+                    val moved = hypot(virtX - virtAtDownX, virtY - virtAtDownY)
+                    // Короткий щипок почти на месте — всегда тап. Рука до него могла и двигаться.
+                    // Порог тот же, что не дал начаться перетаскиванию в льготное окно.
+                    val quick = t - downAt <= cfg.tapMaxMs && moved <= dragStart * cfg.dragGraceMul
+                    if (quick || !movingAtPinch) TouchEvent.Tap(downX, downY) else null
                 }
-                hypot(virtX - virtAtDownX, virtY - virtAtDownY) > dragStart -> {
+                hypot(virtX - virtAtDownX, virtY - virtAtDownY) >
+                    dragStart * (if (t - downAt < cfg.dragGraceMs) cfg.dragGraceMul else 1f) -> {
                     lastDrag = downX to downY
                     touch = Touch.DRAGGING
                     TouchEvent.Down(downX, downY)
@@ -316,7 +332,8 @@ class PinchCursor(config: CursorConfig = CursorConfig()) {
     }
 
     companion object {
-        private const val PINCH_LOOKBACK_MS = 120L
+        /** Точку тапа берём чуть раньше момента подтверждения: сведение пальцев тянет руку. ≈ дебаунс + 1 кадр. */
+        private const val PINCH_LOOKBACK_MS = 100L
         private const val STEADY_CUTOFF = 0.6f
         private const val STEADY_BETA = 2.5f
 

@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.util.Log
 import com.airtouch.gesture.FrameMotion
 import com.airtouch.gesture.HandFrame
+import com.airtouch.gesture.HandPicker
 import com.airtouch.gesture.Landmark
 import java.util.concurrent.ConcurrentHashMap
 import com.google.mediapipe.framework.image.BitmapImageBuilder
@@ -49,7 +50,7 @@ class HandTracker(
         val options = GestureRecognizer.GestureRecognizerOptions.builder()
             .setBaseOptions(base)
             .setRunningMode(RunningMode.LIVE_STREAM)
-            .setNumHands(1)
+            .setNumHands(2) // две, чтобы выбрать свою, а не первую попавшуюся
             .setMinHandDetectionConfidence(0.4f)
             .setMinHandPresenceConfidence(0.4f)
             .setMinTrackingConfidence(0.4f)
@@ -61,6 +62,8 @@ class HandTracker(
 
     /** Движение телефона на кадре, по метке времени: кладём при отправке, забираем с результатом. */
     private val motions = ConcurrentHashMap<Long, FrameMotion>()
+    /** Своя рука среди всех в кадре: захват по близости к прошлому кадру, иначе самая крупная. */
+    private val picker = HandPicker()
 
     /** timestampMs должен строго возрастать — это требование LIVE_STREAM. */
     fun detect(bitmap: Bitmap, timestampMs: Long, motion: FrameMotion = FrameMotion.STILL) {
@@ -73,24 +76,22 @@ class HandTracker(
 
     private fun handle(result: GestureRecognizerResult, image: MPImage) {
         val hands = result.landmarks()
-        val motion = motions.remove(result.timestampMs()) ?: FrameMotion.STILL
-        if (hands.isEmpty()) {
-            onResult(null)
-            return
-        }
-        val points = hands[0].map { Landmark(it.x(), it.y(), it.z()) }
-        val top = result.gestures().firstOrNull()?.firstOrNull()
-        onResult(
+        val ts = result.timestampMs()
+        val motion = motions.remove(ts) ?: FrameMotion.STILL
+        val frames = hands.mapIndexed { i, lm ->
+            val top = result.gestures().getOrNull(i)?.firstOrNull()
             HandFrame(
-                timestampMs = result.timestampMs(),
-                landmarks = points,
+                timestampMs = ts,
+                landmarks = lm.map { Landmark(it.x(), it.y(), it.z()) },
                 imageWidth = image.width,
                 imageHeight = image.height,
                 label = top?.categoryName(),
                 labelScore = top?.score() ?: 0f,
                 motion = motion,
-            ),
-        )
+            )
+        }
+        val i = picker.pick(frames, ts)
+        onResult(if (i < 0) null else frames[i])
     }
 
     override fun close() = recognizer.close()
