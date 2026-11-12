@@ -1,0 +1,23 @@
+<?xml version='1.0' encoding='UTF-8' ?>
+<testsuite name="com.airtouch.e2e.AirPipelineTest" tests="15" failures="0" errors="0" skipped="0" time="62.253" timestamp="2026-11-12T12:57:53" hostname="localhost">
+  <properties>
+    <property name="device" value="emulator-5554 - 13" />
+    <property name="flavor" value="" />
+    <property name="project" value=":app" />
+  </properties>
+  <testcase name="backAction_closesScreen" classname="com.airtouch.e2e.AirPipelineTest" time="3.054" />
+  <testcase name="wavingWithoutPinch_doesNothing" classname="com.airtouch.e2e.AirPipelineTest" time="3.764" />
+  <testcase name="mediumFlick_scrollsList" classname="com.airtouch.e2e.AirPipelineTest" time="4.238" />
+  <testcase name="pinchPauseThenDrag_scrollsList_withoutLongPress" classname="com.airtouch.e2e.AirPipelineTest" time="4.145" />
+  <testcase name="pinchTap_onSystemKeyboard_typesLetter" classname="com.airtouch.e2e.AirPipelineTest" time="5.684" />
+  <testcase name="quickFlick_scrollsList" classname="com.airtouch.e2e.AirPipelineTest" time="4.133" />
+  <testcase name="quickPinch_clicksButton" classname="com.airtouch.e2e.AirPipelineTest" time="2.693" />
+  <testcase name="systemKeyboardOpening_isDetected" classname="com.airtouch.e2e.AirPipelineTest" time="1.762" />
+  <testcase name="pinchHeldStill_isLongPress" classname="com.airtouch.e2e.AirPipelineTest" time="6.087" />
+  <testcase name="airKeyboard_zoneTyping_insertsIntoField" classname="com.airtouch.e2e.AirPipelineTest" time="3.558" />
+  <testcase name="hesitantFlick_pauseThenFlick_noMenu" classname="com.airtouch.e2e.ShortsFeedTest" time="4.606" />
+  <testcase name="restingPinchWithJitter_doesNothing_noMenu" classname="com.airtouch.e2e.ShortsFeedTest" time="5.224" />
+  <testcase name="twoFlicksInARow_twoVideosForward" classname="com.airtouch.e2e.ShortsFeedTest" time="5.241" />
+  <testcase name="flickUp_goesToNextVideo_noMenu" classname="com.airtouch.e2e.ShortsFeedTest" time="3.743" />
+  <testcase name="quickPinch_pausesVideo_noMenu" classname="com.airtouch.e2e.ShortsFeedTest" time="2.836" />
+</testsuite>
