@@ -13,7 +13,7 @@ import kotlin.math.hypot
 class HandPicker(
     private val minPalm: Float = 0.055f,
     private val maxJump: Float = 0.3f,
-    private val keepMs: Long = 1500,
+    private val keepMs: Long = 600,
 ) {
     private var lockX = 0f
     private var lockY = 0f

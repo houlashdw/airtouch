@@ -34,8 +34,14 @@ enum class ActivationZone {
 data class SwipeConfig(
     /** 0.5…2.0. Больше — короче нужен мах. */
     val sensitivity: Float = 1f,
-    /** Длина маха при sensitivity = 1, в долях короткой стороны кадра. */
-    val baseDistance: Float = 0.18f,
+    /** Длина маха при sensitivity = 1, в долях короткой стороны кадра (потолок). */
+    val baseDistance: Float = 0.16f,
+    /**
+     * Длина маха в длинах ладони: далёкая рука мала в кадре, и фиксированная доля кадра означала бы
+     * огромный замах. Берём меньшее из [baseDistance] и palm × этого, но не короче [minDistance].
+     */
+    val palmDistance: Float = 1.1f,
+    val minDistance: Float = 0.07f,
     /** Вертикальный мах должен быть длиннее: подъём/опускание руки чаще бывает случайным. */
     val verticalDistanceFactor: Float = 1.3f,
     /** Мёртвая зона: сдвиги центра ладони меньше этого считаются дрожанием и гасятся. */
@@ -70,6 +76,14 @@ data class SwipeConfig(
     val activationZone: ActivationZone = ActivationZone.FULL,
 ) {
     val requiredDistance: Float get() = baseDistance / sensitivity.coerceIn(0.25f, 4f)
+}
+
+/** Нужная длина маха для руки с длиной ладони [palmLen] (0 — неизвестна: потолок). */
+fun requiredFor(cfg: SwipeConfig, palmLen: Float): Float {
+    val cap = cfg.requiredDistance
+    if (palmLen <= 0f) return cap
+    val byPalm = (palmLen * cfg.palmDistance / cfg.sensitivity.coerceIn(0.25f, 4f)).coerceAtLeast(cfg.minDistance)
+    return minOf(cap, byPalm)
 }
 
 /**
@@ -160,6 +174,9 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         lastPalm = null
     }
 
+    /** Длина ладони на последнем кадре — от неё зависит нужная длина маха. 0 — неизвестна. */
+    private var lastPalmLen = 0f
+
     fun process(frame: HandFrame): AirGesture? {
         val cfg = config
         val t = frame.timestampMs
@@ -171,6 +188,7 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         val rx = raw.x * frame.xScale
         val ry = raw.y * frame.yScale
         lastRaw = Sample(t, rx, ry)
+        lastPalmLen = frame.dist(Lm.WRIST, Lm.MIDDLE_MCP)
 
         if (filterParams != cfg.filterMinCutoff to cfg.filterBeta) {
             filterParams = cfg.filterMinCutoff to cfg.filterBeta
@@ -274,7 +292,7 @@ class GestureDetector(config: SwipeConfig = SwipeConfig()) {
         val dtSec = dtMs / 1000f
         val dx = end.x - start.x
         val dy = end.y - start.y
-        val required = cfg.requiredDistance * distanceFactor
+        val required = requiredFor(cfg, lastPalmLen) * distanceFactor
         val minV = cfg.minVelocity * velocityFactor
         return when {
             abs(dx) >= required && abs(dx) >= cfg.axisDominance * abs(dy) && abs(dx) / dtSec >= minV ->

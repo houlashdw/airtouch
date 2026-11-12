@@ -88,9 +88,16 @@ class GestureEngineTest {
     }
 
     @Test
-    fun poke_worksWithFistToo() {
+    fun fistPush_isBack_notHome() {
+        // Кулаком к экрану — это «схватил и толкнул» → назад; «домой» тыкают открытой ладонью.
         val sim = Sim().hold(400, fist).resize(0.20f, 165, fist).resize(0.15f, 200, fist).hold(300, fist)
-        assertEquals(listOf(SystemAction.HOME), sim.actions)
+        assertEquals(listOf(SystemAction.BACK), sim.actions)
+    }
+
+    @Test
+    fun fistPull_isRecents() {
+        val sim = Sim().hold(400, fist).resize(0.10f, 200, fist).hold(200, fist)
+        assertEquals(listOf(SystemAction.RECENTS), sim.actions)
     }
 
     @Test

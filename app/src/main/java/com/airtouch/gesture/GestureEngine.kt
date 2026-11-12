@@ -36,6 +36,8 @@ data class EngineConfig(
     val cursorEnabled: Boolean = false,
     val cursor: CursorConfig = CursorConfig(),
     val poke: PokeConfig = PokeConfig(),
+    /** ✊ и потянуть/толкнуть: недавние, шторка, назад. */
+    val grab: GrabConfig = GrabConfig(),
     /** ✌️ неподвижно столько — «назад». */
     val backHoldMs: Long = 450,
     /** Насколько «V» может сдвинуться и всё ещё считаться неподвижной (доли короткой стороны кадра). */
@@ -65,6 +67,9 @@ data class EngineOutput(
  * | Движение                         | Действие                 |
  * |----------------------------------|--------------------------|
  * | мах любой формой руки            | свайп ←→↑↓               |
+ * | ✊ и потянуть к себе              | недавние приложения      |
+ * | ✊ потянуть и подержать           | шторка уведомлений       |
+ * | ✊ и толкнуть к телефону          | назад                    |
  * | тык (рука к экрану и обратно)    | домой                    |
  * | тык и задержать руку у экрана    | недавние приложения      |
  * | ✌️ неподвижно                    | назад                    |
@@ -80,6 +85,7 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
     private val swipes = GestureDetector()
     private val pointer = PinchCursor()
     private val poke = PokeDetector()
+    private val grab = GrabDepthDetector()
     private var cursorMode = false
 
     private var vSince: Long? = null
@@ -117,6 +123,7 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         cursorMode = false
         swipes.onHandLost()
         poke.reset()
+        grab.reset()
         resetV()
         palm = null
         dockVisible = false
@@ -155,6 +162,7 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         swipes.config = cfg.swipe.copy(anyPose = true)
         pointer.config = cfg.cursor
         poke.config = cfg.poke
+        grab.config = cfg.grab
 
         val pose = HandPoseClassifier.classify(frame)
         lastPose = pose
@@ -172,6 +180,16 @@ class GestureEngine(config: EngineConfig = EngineConfig()) {
         }
 
         if (cfg.mode == ControlMode.PINCH) return processPinch(frame, cfg)
+
+        // 0. ✊ схватил: потянул к себе — недавние, подержал — шторка, толкнул — назад.
+        val gr = grab.process(frame, pose)
+        if (gr.active || gr.action != null) {
+            poke.reset()
+            swipes.disarm()
+            resetV()
+            val up = if (cursorMode && !pointer.isTouching) leaveCursor() else null
+            return EngineOutput(touch = up, action = gr.action, hold = gr.hold)
+        }
 
         // 1. Тык — любой формой руки. Пока он идёт, всё остальное молчит.
         val pk = poke.process(frame)
